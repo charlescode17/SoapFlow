@@ -1,0 +1,105 @@
+Im making another system for my auncle as he asked they manufacture soaps either bar ones even liquids and they supply they work with more than 500+ clients whome they supply and they have a working team of more that 4 people and they want a system to simplfy there work cz they use paper and books to keep information but there manager uses excel but they want something premium,something that will help to simplfy calculation a system that will help them in there daily activity, so allow me to break down things i noted for this system
+
+
+
+There must be a modern a welcomepage and authentication as well for me i chose clerk and after that we go on dashboard the dashboard must be well designed and much more attractive containing several informations
+
+there must be a link for marketing Agents, this is where my auncle adds people in his team(the peole who take some products and go and supply for there clients in some locations let me explain this for example they have an Agent called Sabira they can come to my aucle and say manager Im going in Kigali im taking 50 boxes of laundry soap and my auncle must write this person took 50 cartons i will explain further in stock movement) but this first part is where my auncle add a marketing agent ensure crud application must work perfectly on this field
+
+
+
+The second is where we add products we provide a product name ,quantity (like if it is a box of of soaps it connsists of 20bars),and the price of that box yep ensure crud application must work perfectly on this field
+
+
+
+the third part is for client when we register clients we work with it mus have fields like client name,Phone number and address in address is his location (District,Sector and a center he/she works in) and ensure adding new client ,reading(display current clients),upadating and editing clients and deleting as usual ensure the crud application must work perfectly
+
+
+
+so we go on stock movement this is the foundation part, the company may make production and that may increase the stockin or they can even make stockout by selling their products
+
+let me explain this like we are o monday
+
+-Some one from production team says boss we have made 100 soaps and that increases the current stock
+
+-later and marketing agents comes and say boss im going in Kigali to supply Soaps so give me 50 boxes
+
+-and later comes another Agent manager i want 25 boxes of soap and imgoing in Nyabihu
+
+And later in the evening a marketing agent comes back and say manager i provided the cartons(boxes of soaps to clients all are finished(all the 30 boxes), or even say i took 50 boxes but i return 25 boxes)
+
+that states that when we make production the stock rises and when a marketing agent takes the boxes to our clients is like stock out that reduces our current stock
+
+so i think stock movement must have this rows
+
+-date (is for a date a stock movement is going to be done)
+
+-Description (description is when we state is it is production process,Marketing Agent and there must be Other(it must be a select option dropdown of production,Marketing Agent,Other)if we select marketing Agent there must also be an input of Location where the MA is going)
+
+-stockin/Return (here is where we record the stockIn based on Description,if is production that is immdiately forstockin If is a marketing Agent or Other that states that is for stockout,Auto correcting if it is stockin or stockout must automate based on what we selected in description) what we add is the quantity To go In Stock based on a particular product (i think we must refine this idea perfectly)
+
+-stock out (I mentioned above what we will base on for stockin and stockout)
+
+-Balance (This shows the current stock After making a stock movement)
+
+So the stock movement report must have
+
+date,Description,StockIn/Return,StockOut And Balance perfectly organised and the report mst be meaningfull showing all things
+
+
+
+There also must be a Marketing Agent Report(the marketing agent record things on paper and brig the record to the mnager) the manager in Marketing agent report he writes
+
+-the date the client took the products
+
+-client name (he will select based on clients in our system it will be a dropdown but with search icon to simplify sorting)
+
+-Product Name(But bcz we are working with one product now it will be a read only component, but this may help if after we have another product to work use )
+
+-Qty (he writes the nbr of quntity the client took and after it will immediately calculate the total price based on the price of product we set earlier in system)
+
+-Price of the product (After selecting the product, it will fetch its price and use the price to add to the quantity in order to get the total price i think you get this)
+
+and -total Price (it will show the tal price of a custom client based on what he took)
+
+and location ((but for location it will fetch based on client we selected above and because we have his  address they will immediately be fetched and they will be read only)
+
+-District
+
+-Sector
+
+-Center he works in),and ensure crud application must work on this field perfectly
+
+-But i was thinking if we could have a tab of payment if is a loan or payed this could help a lot
+
+so by concluding this Marketing Agent report
+
+we must have
+
+-Date a client took the products,Client name,Quantity,Price of products, total price of product and District,sector and Center But i was thinking if we could have a tab of payment if is a loan or payed this could help a lot
+
+But not that on the marketing Agent Report the manager my auncle may make many reports of a single marketing agent or for multiple marketing Agents
+
+And when displaying marketing agent report it can display one marketing agent custom report report may be
+
+either(Daily,weekly,Monthly,Annualy or custom Dates)or also the manager can combine all marketing reports done in one but also there must be a column of marketing agent and his/her name to make thngs more perfect and more modern and the manager when making a report of all marketing agents as one so the report may be
+
+either(Daily,weekly,Monthly,Annualy or custom Dates) i think this is  understandable 
+
+
+
+Sometimes the marketing agent takes the products to clients but they dont pay that time they can pay later , or even take other products when the first loan still loads and can also pay few amount at a time, so ensure things must work perfectly so we may have like a tab of loan that will show each client and total loan he owns us and quantity like saying a client named Joseph has a loan of 95 boxes of soap and based on the price of box of soap it shows the total amount in frw that this client have as a loan
+
+
+
+We must have a page of Payment report must have
+
+-Date
+
+-Client name
+
+-And payment mode[in payment mode the client may use there is (cash,Bank And telephone)in cash section we have Amount and date, for Bank section Amount,Date And bank Name And for telephone section we must have Amount,Date and Receiver name]{not that for bank section the bank names will be sropdown selection and their names will be fetched in databse from setting}
+
+we will have a report page
+
+and a settings page must have like bank section(where we set banks we work with we add names,and this names will be fetched in making payment report) i think you get this and also we will decide other things to go in settings page

@@ -1,0 +1,10 @@
+{
+  "description": "Manage soap inventory with low-stock alerts, role-based access, and detailed audit trails, ensuring efficient operations for owners and managers.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
