@@ -7,7 +7,7 @@ import { useTypewriter } from "../lib/useTypewriter";
 const DEMO_ACCOUNTS: Record<string, User> = {
   "manager@soapflow.rw": {
     id: "u1",
-    name: "Théogène Ndayambaje",
+    name: "Jean Nepo Niyitegeka",
     email: "manager@soapflow.rw",
     role: "manager",
   },
