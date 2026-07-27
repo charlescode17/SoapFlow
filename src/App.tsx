@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { StoreProvider, useStore } from "./lib/store";
+import { supabase } from "./lib/supabase";
 import { Layout } from "./components/Layout";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
@@ -20,7 +21,15 @@ function AppInner() {
 
   if (!state.user) return <Login />;
 
-  const logout = () => dispatch({ type: "SET_USER", payload: null });
+  const logout = async () => {
+    if (state.user) {
+      await supabase
+        .from("auth_logs")
+        .insert({ user_id: state.user.id, event: "logout" });
+    }
+    await supabase.auth.signOut();
+    dispatch({ type: "SET_USER", payload: null });
+  };
 
   return (
     <Layout page={page} setPage={setPage} user={state.user} onLogout={logout}>

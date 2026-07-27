@@ -9,10 +9,12 @@ import {
   LayoutGrid,
 } from "lucide-react";
 import { useStore } from "../lib/store";
+import { supabase } from "../lib/supabase";
 import { Modal } from "../components/Modal";
 import { Confirm } from "../components/Confirm";
-import { fmt, uid } from "../lib/utils";
+import { fmt } from "../lib/utils";
 import type { Product } from "../lib/types";
+import Swal from "sweetalert2";
 
 function currentStock(
   movements: ReturnType<typeof useStore>["state"]["stockMovements"],
@@ -42,8 +44,12 @@ export default function Products() {
   const [form, setForm] = useState(EMPTY);
   const [confirmId, setConfirmId] = useState<string | null>(null);
 
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState("");
+
   const openAdd = () => {
     setForm(EMPTY);
+    setFormError("");
     setModal("add");
   };
   const openEdit = (p: Product) => {
@@ -61,17 +67,109 @@ export default function Products() {
     setEditing(null);
   };
 
-  const handleSave = () => {
-    if (!form.name.trim()) return;
+  const handleSave = async () => {
+    if (!form.name.trim() || !state.user) return;
+    setFormError("");
+    setSaving(true);
+
     if (modal === "add") {
+      const { data, error } = await supabase
+        .from("products")
+        .insert({
+          name: form.name.trim(),
+          qty_per_box: form.qtyPerBox,
+          price_per_box: form.pricePerBox,
+          low_stock_threshold: form.lowStockThreshold,
+        })
+        .select()
+        .single();
+
+      setSaving(false);
+      if (error) {
+        setFormError(error.message);
+        return;
+      }
+
       dispatch({
         type: "ADD_PRODUCT",
-        payload: { id: uid(), ...form, deleted: false },
+        payload: {
+          id: data.id,
+          name: data.name,
+          qtyPerBox: data.qty_per_box,
+          pricePerBox: data.price_per_box,
+          lowStockThreshold: data.low_stock_threshold,
+          deleted: false,
+        },
+      });
+
+      await supabase.from("activity_logs").insert({
+        actor_id: state.user.id,
+        actor_name: state.user.name,
+        action: "created",
+        entity_type: "product",
+        entity_id: data.id,
+        entity_name: data.name,
       });
     } else if (editing) {
+      const { error } = await supabase
+        .from("products")
+        .update({
+          name: form.name.trim(),
+          qty_per_box: form.qtyPerBox,
+          price_per_box: form.pricePerBox,
+          low_stock_threshold: form.lowStockThreshold,
+        })
+        .eq("id", editing.id);
+
+      setSaving(false);
+      if (error) {
+        setFormError(error.message);
+        return;
+      }
+
       dispatch({ type: "UPDATE_PRODUCT", payload: { ...editing, ...form } });
+
+      await supabase.from("activity_logs").insert({
+        actor_id: state.user.id,
+        actor_name: state.user.name,
+        action: "updated",
+        entity_type: "product",
+        entity_id: editing.id,
+        entity_name: form.name.trim(),
+      });
     }
     closeModal();
+  };
+
+  const handleDelete = async (productId: string) => {
+    if (!state.user) return;
+    const product = products.find((p) => p.id === productId);
+
+    const { error } = await supabase
+      .from("products")
+      .update({ deleted: true })
+      .eq("id", productId);
+
+    if (error) {
+      Swal.fire({
+        icon: "error",
+        title: "Could not remove product",
+        text: error.message,
+        confirmButtonColor: "#2E9E8F",
+      });
+      return;
+    }
+
+    dispatch({ type: "DELETE_PRODUCT", id: productId });
+
+    await supabase.from("activity_logs").insert({
+      actor_id: state.user.id,
+      actor_name: state.user.name,
+      action: "deleted",
+      entity_type: "product",
+      entity_id: productId,
+      entity_name: product?.name ?? "unknown",
+    });
   };
 
   const set =
@@ -397,6 +495,13 @@ export default function Products() {
                 />
               </div>
             ))}
+
+            {formError && (
+              <div className="text-danger text-xs bg-danger/10 border border-danger/20 rounded-[var(--radius-sm)] px-3 py-2">
+                {formError}
+              </div>
+            )}
+
             <div className="flex gap-3 pt-2">
               <button
                 onClick={closeModal}
@@ -406,9 +511,14 @@ export default function Products() {
               </button>
               <button
                 onClick={handleSave}
-                className="flex-1 py-2.5 text-sm bg-primary text-white rounded-[var(--radius)] hover:bg-primary/90 font-semibold transition-colors"
+                disabled={saving}
+                className="flex-1 py-2.5 text-sm bg-primary text-white rounded-[var(--radius)] hover:bg-primary/90 font-semibold transition-colors disabled:opacity-60"
               >
-                {modal === "add" ? "Add Product" : "Save Changes"}
+                {saving
+                  ? "Saving…"
+                  : modal === "add"
+                    ? "Add Product"
+                    : "Save Changes"}
               </button>
             </div>
           </div>
@@ -418,8 +528,8 @@ export default function Products() {
       {confirmId && (
         <Confirm
           message={`Remove "${products.find((p) => p.id === confirmId)?.name}" from your catalogue? Historical data will be preserved.`}
-          onConfirm={() => {
-            dispatch({ type: "DELETE_PRODUCT", id: confirmId });
+          onConfirm={async () => {
+            await handleDelete(confirmId);
             setConfirmId(null);
           }}
           onCancel={() => setConfirmId(null)}

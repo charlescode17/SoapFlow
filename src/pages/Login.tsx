@@ -1,23 +1,9 @@
 import { useState } from "react";
 import { Droplets, Eye, EyeOff } from "lucide-react";
 import { useStore } from "../lib/store";
-import type { User } from "../lib/types";
+import { supabase } from "../lib/supabase";
 import { useTypewriter } from "../lib/useTypewriter";
-
-const DEMO_ACCOUNTS: Record<string, User> = {
-  "manager@soapflow.rw": {
-    id: "u1",
-    name: "Jean Nepo Niyitegeka",
-    email: "manager@soapflow.rw",
-    role: "manager",
-  },
-  "owner@soapflow.rw": {
-    id: "u2",
-    name: "Augustin Ndayambaje",
-    email: "owner@soapflow.rw",
-    role: "owner",
-  },
-};
+import Swal from "sweetalert2";
 
 export default function Login() {
   const { dispatch } = useStore();
@@ -39,13 +25,59 @@ export default function Login() {
     e.preventDefault();
     setError("");
     setLoading(true);
-    await new Promise((r) => setTimeout(r, 600));
-    const user = DEMO_ACCOUNTS[email.toLowerCase()];
-    if (user && password === "soapflow2025") {
-      dispatch({ type: "SET_USER", payload: user });
-    } else {
+
+    const { data, error: authError } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (authError || !data.user) {
       setError("Invalid email or password.");
+      setLoading(false);
+      return;
     }
+
+    const { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", data.user.id)
+      .single();
+
+    if (profileError || !profile) {
+      setError(
+        "No profile found for this account. Ask your manager to set one up.",
+      );
+      setLoading(false);
+      return;
+    }
+
+    if (!profile.is_active) {
+      await supabase.auth.signOut();
+      setLoading(false);
+      Swal.fire({
+        icon: "error",
+        title: "Account deactivated",
+        text: "Your account has been deactivated. Contact your manager for access.",
+        confirmButtonColor: "#2E9E8F",
+      });
+      return;
+    }
+
+    await supabase
+      .from("auth_logs")
+      .insert({ user_id: profile.id, event: "login" });
+
+    dispatch({
+      type: "SET_USER",
+      payload: {
+        id: profile.id,
+        name: profile.name,
+        email: profile.email,
+        role: profile.role,
+        phone: profile.phone,
+      },
+    });
+
     setLoading(false);
   };
 
@@ -161,7 +193,7 @@ export default function Login() {
             </button>
           </form>
 
-          <div className="mt-8 p-4 bg-card border border-border rounded-[var(--radius)] space-y-2">
+          {/* <div className="mt-8 p-4 bg-card border border-border rounded-[var(--radius)] space-y-2">
             <p className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">
               Demo accounts
             </p>
@@ -197,7 +229,7 @@ export default function Login() {
             <p className="text-[11px] text-muted/70 mt-2">
               Password: <span className="font-mono">soapflow2025</span>
             </p>
-          </div>
+          </div> */}
         </div>
       </div>
     </div>

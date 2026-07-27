@@ -1,4 +1,4 @@
-export type Role = "manager" | "owner";
+export type Role = "manager" | "marketing_agent" | "stock_agent";
 export type StockType = "production" | "marketing_agent" | "other";
 export type PaymentStatus = "paid" | "loan";
 export type PaymentMode = "cash" | "bank" | "telephone";
@@ -19,6 +19,7 @@ export interface User {
   name: string;
   email: string;
   role: Role;
+  phone?: string;
 }
 
 export interface Agent {

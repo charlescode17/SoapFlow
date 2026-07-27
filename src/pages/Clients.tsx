@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Plus,
   Pencil,
@@ -11,25 +11,12 @@ import {
   MapPin,
 } from "lucide-react";
 import { useStore } from "../lib/store";
+import { supabase } from "../lib/supabase";
 import { Modal } from "../components/Modal";
 import { Confirm } from "../components/Confirm";
-import { fmt, uid } from "../lib/utils";
+import { fmt } from "../lib/utils";
 import type { Client } from "../lib/types";
-
-const DISTRICTS = [
-  "Kigali",
-  "Nyabihu",
-  "Musanze",
-  "Rubavu",
-  "Huye",
-  "Rwamagana",
-  "Ngoma",
-  "Kayonza",
-  "Bugesera",
-  "Gisagara",
-  "Karongi",
-  "Nyamasheke",
-];
+import Swal from "sweetalert2";
 const EMPTY: Omit<Client, "id" | "deleted"> = {
   name: "",
   phone: "",
@@ -52,6 +39,38 @@ export default function Clients() {
   const [editing, setEditing] = useState<Client | null>(null);
   const [form, setForm] = useState(EMPTY);
   const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState("");
+
+  const [districts, setDistricts] = useState<string[]>([]);
+  const [sectorOptions, setSectorOptions] = useState<string[]>([]);
+
+  useEffect(() => {
+    async function loadDistricts() {
+      const { data } = await supabase
+        .from("rwanda_locations")
+        .select("district")
+        .order("district");
+      if (data) setDistricts(Array.from(new Set(data.map((d) => d.district))));
+    }
+    loadDistricts();
+  }, []);
+
+  useEffect(() => {
+    async function loadSectors() {
+      if (!form.district) {
+        setSectorOptions([]);
+        return;
+      }
+      const { data } = await supabase
+        .from("rwanda_locations")
+        .select("sector")
+        .eq("district", form.district)
+        .order("sector");
+      if (data) setSectorOptions(data.map((d) => d.sector));
+    }
+    loadSectors();
+  }, [form.district]);
 
   const filtered = clients.filter((c) => {
     const matchSearch =
@@ -74,6 +93,7 @@ export default function Clients() {
 
   const openAdd = () => {
     setForm(EMPTY);
+    setFormError("");
     setModal("add");
   };
   const openEdit = (c: Client) => {
@@ -85,6 +105,7 @@ export default function Clients() {
       sector: c.sector,
       center: c.center,
     });
+    setFormError("");
     setModal("edit");
   };
   const closeModal = () => {
@@ -92,17 +113,101 @@ export default function Clients() {
     setEditing(null);
   };
 
-  const handleSave = () => {
-    if (!form.name.trim()) return;
+  const handleSave = async () => {
+    if (!form.name.trim() || !state.user) return;
+    setFormError("");
+    setSaving(true);
+
     if (modal === "add") {
-      dispatch({
-        type: "ADD_CLIENT",
-        payload: { id: uid(), ...form, deleted: false },
+      const { data, error } = await supabase
+        .from("clients")
+        .insert({
+          name: form.name.trim(),
+          phone: form.phone.trim(),
+          district: form.district || null,
+          sector: form.sector || null,
+          center: form.center.trim() || null,
+        })
+        .select()
+        .single();
+
+      setSaving(false);
+      if (error) {
+        setFormError(error.message);
+        return;
+      }
+
+      dispatch({ type: "ADD_CLIENT", payload: { ...data, deleted: false } });
+
+      await supabase.from("activity_logs").insert({
+        actor_id: state.user.id,
+        actor_name: state.user.name,
+        action: "created",
+        entity_type: "client",
+        entity_id: data.id,
+        entity_name: data.name,
       });
     } else if (editing) {
+      const { error } = await supabase
+        .from("clients")
+        .update({
+          name: form.name.trim(),
+          phone: form.phone.trim(),
+          district: form.district || null,
+          sector: form.sector || null,
+          center: form.center.trim() || null,
+        })
+        .eq("id", editing.id);
+
+      setSaving(false);
+      if (error) {
+        setFormError(error.message);
+        return;
+      }
+
       dispatch({ type: "UPDATE_CLIENT", payload: { ...editing, ...form } });
+
+      await supabase.from("activity_logs").insert({
+        actor_id: state.user.id,
+        actor_name: state.user.name,
+        action: "updated",
+        entity_type: "client",
+        entity_id: editing.id,
+        entity_name: form.name.trim(),
+      });
     }
     closeModal();
+  };
+
+  const handleDelete = async (clientId: string) => {
+    if (!state.user) return;
+    const client = clients.find((c) => c.id === clientId);
+
+    const { error } = await supabase
+      .from("clients")
+      .update({ deleted: true })
+      .eq("id", clientId);
+
+    if (error) {
+      Swal.fire({
+        icon: "error",
+        title: "Could not remove client",
+        text: error.message,
+        confirmButtonColor: "#2E9E8F",
+      });
+      return;
+    }
+
+    dispatch({ type: "DELETE_CLIENT", id: clientId });
+
+    await supabase.from("activity_logs").insert({
+      actor_id: state.user.id,
+      actor_name: state.user.name,
+      action: "deleted",
+      entity_type: "client",
+      entity_id: clientId,
+      entity_name: client?.name ?? "unknown",
+    });
   };
 
   const setF =
@@ -151,7 +256,7 @@ export default function Clients() {
             className="flex-1 sm:flex-none px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
           >
             <option value="">All Districts</option>
-            {DISTRICTS.map((d) => (
+            {districts.map((d) => (
               <option key={d}>{d}</option>
             ))}
           </select>
@@ -442,11 +547,17 @@ export default function Clients() {
               </label>
               <select
                 value={form.district}
-                onChange={setF("district")}
+                onChange={(e) =>
+                  setForm((f) => ({
+                    ...f,
+                    district: e.target.value,
+                    sector: "",
+                  }))
+                }
                 className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] bg-white focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
               >
                 <option value="">Select district</option>
-                {DISTRICTS.map((d) => (
+                {districts.map((d) => (
                   <option key={d}>{d}</option>
                 ))}
               </select>
@@ -455,12 +566,19 @@ export default function Clients() {
               <label className="text-xs font-semibold text-muted uppercase tracking-wide block mb-1.5">
                 Sector
               </label>
-              <input
+              <select
                 value={form.sector}
                 onChange={setF("sector")}
-                placeholder="e.g. Kicukiro"
-                className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
-              />
+                disabled={!form.district}
+                className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] bg-white focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary disabled:opacity-50"
+              >
+                <option value="">
+                  {form.district ? "Select sector" : "Select district first"}
+                </option>
+                {sectorOptions.map((s) => (
+                  <option key={s}>{s}</option>
+                ))}
+              </select>
             </div>
             <div>
               <label className="text-xs font-semibold text-muted uppercase tracking-wide block mb-1.5">
@@ -473,6 +591,12 @@ export default function Clients() {
                 className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
               />
             </div>
+            {formError && (
+              <div className="sm:col-span-2 text-danger text-xs bg-danger/10 border border-danger/20 rounded-[var(--radius-sm)] px-3 py-2">
+                {formError}
+              </div>
+            )}
+
             <div className="sm:col-span-2 flex gap-3 pt-2">
               <button
                 onClick={closeModal}
@@ -482,9 +606,10 @@ export default function Clients() {
               </button>
               <button
                 onClick={handleSave}
-                className="flex-1 py-2.5 text-sm bg-primary text-white rounded-[var(--radius)] hover:bg-primary/90 font-semibold transition-colors"
+                disabled={saving}
+                className="flex-1 py-2.5 text-sm bg-primary text-white rounded-[var(--radius)] hover:bg-primary/90 font-semibold transition-colors disabled:opacity-60"
               >
-                {modal === "add" ? "Register Client" : "Save Changes"}
+                {saving ? "Saving…" : modal === "add" ? "Register Client" : "Save Changes"}
               </button>
             </div>
           </div>
@@ -494,8 +619,8 @@ export default function Clients() {
       {confirmId && (
         <Confirm
           message={`Remove ${clients.find((c) => c.id === confirmId)?.name}? Historical records will be preserved.`}
-          onConfirm={() => {
-            dispatch({ type: "DELETE_CLIENT", id: confirmId });
+          onConfirm={async () => {
+            await handleDelete(confirmId);
             setConfirmId(null);
           }}
           onCancel={() => setConfirmId(null)}
