@@ -1,5 +1,5 @@
 export type Role = "manager" | "marketing_agent" | "stock_agent";
-export type StockType = "production" | "marketing_agent" | "other";
+export type StockType = "production" | "marketing_agent" | "customer_sale" | "other";
 export type PaymentStatus = "paid" | "loan";
 export type PaymentMode = "cash" | "bank" | "telephone";
 export type Page =
@@ -33,9 +33,11 @@ export interface Agent {
 export interface Product {
   id: string;
   name: string;
-  qtyPerBox: number;
-  pricePerBox: number;
-  lowStockThreshold: number;
+  unitName: string;          // e.g. "bar", "bottle", "piece"
+  unitPrice: number;         // solo/piece price
+  piecesPerBox: number | null;
+  boxPrice: number | null;
+  lowStockThreshold: number; // in base units (pieces)
   deleted: boolean;
 }
 
@@ -55,7 +57,12 @@ export interface StockMovement {
   date: string;
   type: StockType;
   agentId?: string;
+  customerName?: string;
   location?: string;
+  isReturn: boolean;
+  unit: "box" | "piece";
+  enteredQty: number;
+  baseQty: number;
   stockIn: number;
   stockOut: number;
   balance: number;

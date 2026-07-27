@@ -43,6 +43,15 @@ const NAV: {
   { id: "settings", label: "Settings", icon: Settings, group: "System" },
 ];
 
+const ALL_PAGES = NAV.map((n) => n.id);
+
+const ROLE_PAGES: Record<string, Page[]> = {
+  manager: ALL_PAGES,
+  marketing_agent: ["dashboard", "clients", "reports", "loans", "payments", "settings"],
+  stock_agent: ["dashboard", "products", "stock", "report", "settings"],
+  readonly: ALL_PAGES,
+};
+
 interface Props {
   page: Page;
   setPage: (p: Page) => void;
@@ -147,7 +156,10 @@ export function Layout({ page, setPage, user, onLogout, children }: Props) {
         {/* Nav — compact spacing, no wasted vertical space */}
         <nav className="flex-1 overflow-y-auto overflow-x-hidden py-3 px-2.5">
           {groups.map((group) => {
-            const items = NAV.filter((n) => (n.group ?? "") === group);
+            const allowedPages = ROLE_PAGES[user.role] ?? ALL_PAGES;
+            const items = NAV.filter(
+              (n) => (n.group ?? "") === group && allowedPages.includes(n.id),
+            );
             if (!items.length) return null;
             return (
               <div key={group} className="mb-1.5">

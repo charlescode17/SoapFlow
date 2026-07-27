@@ -48,7 +48,7 @@ const LANGUAGES = [
   { id: "rw", label: "Kinyarwanda" },
 ];
 
-const SECTIONS: { id: Section; label: string; icon: React.ElementType }[] = [
+const SECTIONS_ALL: { id: Section; label: string; icon: React.ElementType }[] = [
   { id: "account", label: "Account", icon: UserIcon },
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "language", label: "Language", icon: Languages },
@@ -59,12 +59,30 @@ const SECTIONS: { id: Section; label: string; icon: React.ElementType }[] = [
   { id: "security", label: "Security", icon: Lock },
 ];
 
+const LIMITED_SECTION_IDS: Section[] = ["account", "appearance", "language"];
+
 export default function Settings() {
   const { state, dispatch } = useStore();
   const canEdit = state.user?.role === "manager";
+  const SECTIONS = canEdit
+    ? SECTIONS_ALL
+    : SECTIONS_ALL.filter((s) => LIMITED_SECTION_IDS.includes(s.id));
   const [newBank, setNewBank] = useState("");
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [section, setSection] = useState<Section>("account");
+
+  // --- Account editing ---
+  const [accountForm, setAccountForm] = useState({
+    name: "",
+    phone: "",
+    email: "",
+    newPassword: "",
+    confirmPassword: "",
+  });
+  const [accountSaving, setAccountSaving] = useState(false);
+  const [accountError, setAccountError] = useState("");
+  const [accountSuccess, setAccountSuccess] = useState("");
+  const [showAccountPw, setShowAccountPw] = useState(false);
 
   // --- Users management ---
   type ProfileRow = {
@@ -93,8 +111,110 @@ export default function Settings() {
     if (section === "users" && canEdit) fetchUsers();
     if (section === "logs" && canEdit) fetchLogs();
     if (section === "security" && canEdit) fetchPinStatus();
+    if (section === "account" && state.user) {
+      setAccountForm({
+        name: state.user.name,
+        phone: state.user.phone ?? "",
+        email: state.user.email,
+        newPassword: "",
+        confirmPassword: "",
+      });
+      setAccountError("");
+      setAccountSuccess("");
+    }
     setSelectedDate(null);
   }, [section]);
+
+  async function handleSaveAccount() {
+    if (!state.user) return;
+    setAccountError("");
+    setAccountSuccess("");
+
+    if (accountForm.newPassword || accountForm.confirmPassword) {
+      if (accountForm.newPassword.length < 6) {
+        setAccountError("New password must be at least 6 characters.");
+        return;
+      }
+      if (accountForm.newPassword !== accountForm.confirmPassword) {
+        setAccountError("Passwords don't match.");
+        return;
+      }
+    }
+
+    setAccountSaving(true);
+
+    const { error: profileError } = await supabase
+      .from("profiles")
+      .update({ name: accountForm.name.trim(), phone: accountForm.phone.trim() || null })
+      .eq("id", state.user.id);
+
+    if (profileError) {
+      setAccountSaving(false);
+      setAccountError(profileError.message);
+      return;
+    }
+
+    if (accountForm.newPassword) {
+      const { error: pwError } = await supabase.auth.updateUser({ password: accountForm.newPassword });
+      if (pwError) {
+        setAccountSaving(false);
+        setAccountError(pwError.message);
+        return;
+      }
+    }
+
+    const emailChanged = accountForm.email.trim() !== state.user.email;
+
+    if (emailChanged) {
+      const { error: emailError } = await supabase.auth.updateUser({ email: accountForm.email.trim() });
+      if (emailError) {
+        setAccountSaving(false);
+        setAccountError(emailError.message);
+        return;
+      }
+      await supabase.from("profiles").update({ email: accountForm.email.trim() }).eq("id", state.user.id);
+
+      await supabase.from("activity_logs").insert({
+        actor_id: state.user.id,
+        actor_name: accountForm.name.trim(),
+        action: "updated",
+        entity_type: "user",
+        entity_id: state.user.id,
+        entity_name: accountForm.name.trim(),
+        details: { changed: "email" },
+      });
+
+      await Swal.fire({
+        icon: "info",
+        title: "Confirm your new email",
+        text: "We sent a confirmation link to your new email address. Please log in again after confirming.",
+        confirmButtonColor: "#2E9E8F",
+      });
+
+      await supabase.auth.signOut();
+      dispatch({ type: "SET_USER", payload: null });
+      setAccountSaving(false);
+      return;
+    }
+
+    dispatch({
+      type: "SET_USER",
+      payload: { ...state.user, name: accountForm.name.trim(), phone: accountForm.phone.trim() },
+    });
+
+    await supabase.from("activity_logs").insert({
+      actor_id: state.user.id,
+      actor_name: accountForm.name.trim(),
+      action: "updated",
+      entity_type: "user",
+      entity_id: state.user.id,
+      entity_name: accountForm.name.trim(),
+    });
+
+    setAccountForm((f) => ({ ...f, newPassword: "", confirmPassword: "" }));
+    setAccountSaving(false);
+    setAccountSuccess("Account updated.");
+  }
   // --- Activity logs ---
   type LogEntry = {
     id: string;
@@ -640,35 +760,95 @@ export default function Settings() {
         <div className="flex-1 min-w-0 max-w-2xl">
           {section === "account" && (
             <div className="bg-card border border-border rounded-[var(--radius-lg)] p-5 sm:p-6">
-              <h3 className="text-sm font-semibold text-foreground mb-4">
-                Account
-              </h3>
-              <div className="flex items-center gap-4">
+              <h3 className="text-sm font-semibold text-foreground mb-4">Account</h3>
+              <div className="flex items-center gap-4 mb-6">
                 <div className="w-12 h-12 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0">
-                  <span className="text-primary text-lg font-bold">
-                    {state.user?.name.charAt(0)}
-                  </span>
+                  <span className="text-primary text-lg font-bold">{state.user?.name.charAt(0)}</span>
                 </div>
                 <div className="min-w-0">
-                  <div className="font-semibold text-foreground truncate">
-                    {state.user?.name}
-                  </div>
-                  <div className="text-sm text-muted truncate">
-                    {state.user?.email}
-                  </div>
+                  <div className="font-semibold text-foreground truncate">{state.user?.name}</div>
                   <div
                     className={`inline-flex mt-1 text-[11px] font-semibold uppercase px-2.5 py-0.5 rounded-full ${
-                      state.user?.role === "manager"
-                        ? "bg-primary/10 text-primary"
-                        : "bg-secondary/10 text-secondary"
+                      state.user?.role === "manager" ? "bg-primary/10 text-primary" : "bg-secondary/10 text-secondary"
                     }`}
                   >
-                    {state.user?.role} —{" "}
-                    {state.user?.role === "manager"
-                      ? "Full access"
-                      : "Read only"}
+                    {state.user?.role} — {state.user?.role === "manager" ? "Full access" : "Read only"}
                   </div>
                 </div>
+              </div>
+
+              <div className="space-y-4 max-w-md">
+                <div>
+                  <label className="text-xs font-semibold text-muted uppercase tracking-wide block mb-1.5">Full Name</label>
+                  <input
+                    value={accountForm.name}
+                    onChange={(e) => setAccountForm((f) => ({ ...f, name: e.target.value }))}
+                    className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-muted uppercase tracking-wide block mb-1.5">Phone</label>
+                  <input
+                    value={accountForm.phone}
+                    onChange={(e) => setAccountForm((f) => ({ ...f, phone: e.target.value }))}
+                    className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-muted uppercase tracking-wide block mb-1.5">Email Address</label>
+                  <input
+                    type="email"
+                    value={accountForm.email}
+                    onChange={(e) => setAccountForm((f) => ({ ...f, email: e.target.value }))}
+                    className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+                  />
+                  <p className="text-[11px] text-muted mt-1">Changing this signs you out — you'll confirm it by email, then log in again.</p>
+                </div>
+                <div className="pt-2 border-t border-border">
+                  <p className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">Change Password (optional)</p>
+                  <div className="relative mb-3">
+                    <input
+                      type={showAccountPw ? "text" : "password"}
+                      value={accountForm.newPassword}
+                      onChange={(e) => setAccountForm((f) => ({ ...f, newPassword: e.target.value }))}
+                      placeholder="New password"
+                      className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary pr-10"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowAccountPw((v) => !v)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted hover:text-foreground"
+                    >
+                      {showAccountPw ? <EyeOff size={14} /> : <Eye size={14} />}
+                    </button>
+                  </div>
+                  <input
+                    type={showAccountPw ? "text" : "password"}
+                    value={accountForm.confirmPassword}
+                    onChange={(e) => setAccountForm((f) => ({ ...f, confirmPassword: e.target.value }))}
+                    placeholder="Confirm new password"
+                    className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+                  />
+                </div>
+
+                {accountError && (
+                  <div className="text-danger text-xs bg-danger/10 border border-danger/20 rounded-[var(--radius-sm)] px-3 py-2">
+                    {accountError}
+                  </div>
+                )}
+                {accountSuccess && (
+                  <div className="text-success text-xs bg-success/10 border border-success/20 rounded-[var(--radius-sm)] px-3 py-2">
+                    {accountSuccess}
+                  </div>
+                )}
+
+                <button
+                  onClick={handleSaveAccount}
+                  disabled={accountSaving}
+                  className="bg-primary text-white text-sm font-semibold px-5 py-2.5 rounded-[var(--radius)] hover:bg-primary/90 transition-colors disabled:opacity-60"
+                >
+                  {accountSaving ? "Saving…" : "Save Changes"}
+                </button>
               </div>
             </div>
           )}

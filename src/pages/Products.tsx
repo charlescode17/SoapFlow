@@ -26,8 +26,11 @@ function currentStock(
 
 const EMPTY = {
   name: "",
-  qtyPerBox: 20,
-  pricePerBox: 0,
+  unitName: "piece",
+  unitPrice: 0,
+  hasBoxing: false,
+  piecesPerBox: 20,
+  boxPrice: 0,
   lowStockThreshold: 100,
 };
 
@@ -35,7 +38,8 @@ type ViewMode = "list" | "grid";
 
 export default function Products() {
   const { state, dispatch } = useStore();
-  const canEdit = state.user?.role === "manager";
+  const canEdit = state.user?.role === "manager" || state.user?.role === "stock_agent";
+  const canDelete = state.user?.role === "manager";
   const products = state.products.filter((p) => !p.deleted);
 
   const [view, setView] = useState<ViewMode>("list");
@@ -56,10 +60,14 @@ export default function Products() {
     setEditing(p);
     setForm({
       name: p.name,
-      qtyPerBox: p.qtyPerBox,
-      pricePerBox: p.pricePerBox,
+      unitName: p.unitName,
+      unitPrice: p.unitPrice,
+      hasBoxing: p.piecesPerBox !== null,
+      piecesPerBox: p.piecesPerBox ?? 20,
+      boxPrice: p.boxPrice ?? 0,
       lowStockThreshold: p.lowStockThreshold,
     });
+    setFormError("");
     setModal("edit");
   };
   const closeModal = () => {
@@ -77,8 +85,10 @@ export default function Products() {
         .from("products")
         .insert({
           name: form.name.trim(),
-          qty_per_box: form.qtyPerBox,
-          price_per_box: form.pricePerBox,
+          unit_name: form.unitName.trim() || "piece",
+          unit_price: form.unitPrice,
+          pieces_per_box: form.hasBoxing ? form.piecesPerBox : null,
+          box_price: form.hasBoxing ? form.boxPrice : null,
           low_stock_threshold: form.lowStockThreshold,
         })
         .select()
@@ -95,8 +105,10 @@ export default function Products() {
         payload: {
           id: data.id,
           name: data.name,
-          qtyPerBox: data.qty_per_box,
-          pricePerBox: data.price_per_box,
+          unitName: data.unit_name,
+          unitPrice: data.unit_price,
+          piecesPerBox: data.pieces_per_box,
+          boxPrice: data.box_price,
           lowStockThreshold: data.low_stock_threshold,
           deleted: false,
         },
@@ -115,8 +127,10 @@ export default function Products() {
         .from("products")
         .update({
           name: form.name.trim(),
-          qty_per_box: form.qtyPerBox,
-          price_per_box: form.pricePerBox,
+          unit_name: form.unitName.trim() || "piece",
+          unit_price: form.unitPrice,
+          pieces_per_box: form.hasBoxing ? form.piecesPerBox : null,
+          box_price: form.hasBoxing ? form.boxPrice : null,
           low_stock_threshold: form.lowStockThreshold,
         })
         .eq("id", editing.id);
@@ -127,7 +141,18 @@ export default function Products() {
         return;
       }
 
-      dispatch({ type: "UPDATE_PRODUCT", payload: { ...editing, ...form } });
+      dispatch({
+        type: "UPDATE_PRODUCT",
+        payload: {
+          ...editing,
+          name: form.name.trim(),
+          unitName: form.unitName.trim() || "piece",
+          unitPrice: form.unitPrice,
+          piecesPerBox: form.hasBoxing ? form.piecesPerBox : null,
+          boxPrice: form.hasBoxing ? form.boxPrice : null,
+          lowStockThreshold: form.lowStockThreshold,
+        },
+      });
 
       await supabase.from("activity_logs").insert({
         actor_id: state.user.id,
@@ -256,12 +281,14 @@ export default function Products() {
                       >
                         <Pencil size={13} />
                       </button>
-                      <button
-                        onClick={() => setConfirmId(p.id)}
-                        className="p-1.5 text-muted hover:text-danger hover:bg-danger/10 rounded-[var(--radius-sm)] transition-colors"
-                      >
-                        <Trash2 size={13} />
-                      </button>
+                      {canDelete && (
+                        <button
+                          onClick={() => setConfirmId(p.id)}
+                          className="p-1.5 text-muted hover:text-danger hover:bg-danger/10 rounded-[var(--radius-sm)] transition-colors"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -375,12 +402,14 @@ export default function Products() {
                             >
                               <Pencil size={14} />
                             </button>
-                            <button
-                              onClick={() => setConfirmId(p.id)}
-                              className="p-2 text-muted hover:text-danger hover:bg-danger/10 rounded-[var(--radius-sm)] transition-colors"
-                            >
-                              <Trash2 size={14} />
-                            </button>
+                            {canDelete && (
+                              <button
+                                onClick={() => setConfirmId(p.id)}
+                                className="p-2 text-muted hover:text-danger hover:bg-danger/10 rounded-[var(--radius-sm)] transition-colors"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            )}
                           </div>
                         </td>
                       )}
@@ -435,12 +464,14 @@ export default function Products() {
                       >
                         <Pencil size={14} />
                       </button>
-                      <button
-                        onClick={() => setConfirmId(p.id)}
-                        className="p-2 text-muted hover:text-danger hover:bg-danger/10 rounded-[var(--radius-sm)] transition-colors"
-                      >
-                        <Trash2 size={14} />
-                      </button>
+                      {canDelete && (
+                        <button
+                          onClick={() => setConfirmId(p.id)}
+                          className="p-2 text-muted hover:text-danger hover:bg-danger/10 rounded-[var(--radius-sm)] transition-colors"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -456,45 +487,82 @@ export default function Products() {
           onClose={closeModal}
         >
           <div className="space-y-4">
-            {[
-              {
-                label: "Product Name",
-                key: "name" as const,
-                placeholder: "e.g. Laundry Soap",
-                type: "text",
-              },
-              {
-                label: "Bars per Box",
-                key: "qtyPerBox" as const,
-                placeholder: "20",
-                type: "number",
-              },
-              {
-                label: "Price per Box (RWF)",
-                key: "pricePerBox" as const,
-                placeholder: "5500",
-                type: "number",
-              },
-              {
-                label: "Low Stock Threshold (boxes)",
-                key: "lowStockThreshold" as const,
-                placeholder: "100",
-                type: "number",
-              },
-            ].map((f) => (
-              <div key={f.key}>
-                <label className="text-xs font-semibold text-muted uppercase tracking-wide block mb-1.5">
-                  {f.label}
-                </label>
-                <input
-                  type={f.type}
-                  value={form[f.key]}
-                  onChange={set(f.key)}
-                  placeholder={f.placeholder}
-                  className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
-                />
-              </div>
-            ))}
+            <div>
+              <label className="text-xs font-semibold text-muted uppercase tracking-wide block mb-1.5">Product Name</label>
+              <input
+                value={form.name}
+                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                placeholder="e.g. Laundry Bar Soap"
+                className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-muted uppercase tracking-wide block mb-1.5">Unit Name</label>
+              <input
+                value={form.unitName}
+                onChange={(e) => setForm((f) => ({ ...f, unitName: e.target.value }))}
+                placeholder="e.g. bar, bottle, piece"
+                className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-muted uppercase tracking-wide block mb-1.5">Solo Price per {form.unitName || "unit"} (RWF)</label>
+              <input
+                type="number"
+                value={form.unitPrice}
+                onChange={(e) => setForm((f) => ({ ...f, unitPrice: Number(e.target.value) }))}
+                placeholder="150"
+                className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+              />
+            </div>
+
+            <label className="flex items-center gap-2 cursor-pointer pt-1">
+              <input
+                type="checkbox"
+                checked={form.hasBoxing}
+                onChange={(e) => setForm((f) => ({ ...f, hasBoxing: e.target.checked }))}
+                className="w-4 h-4 accent-primary"
+              />
+              <span className="text-sm text-foreground">This product is also sold in boxes</span>
+            </label>
+
+            {form.hasBoxing && (
+              <>
+                <div>
+                  <label className="text-xs font-semibold text-muted uppercase tracking-wide block mb-1.5">{form.unitName || "Units"} per Box</label>
+                  <input
+                    type="number"
+                    value={form.piecesPerBox}
+                    onChange={(e) => setForm((f) => ({ ...f, piecesPerBox: Number(e.target.value) }))}
+                    placeholder="20"
+                    className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-muted uppercase tracking-wide block mb-1.5">Box Price (RWF)</label>
+                  <input
+                    type="number"
+                    value={form.boxPrice}
+                    onChange={(e) => setForm((f) => ({ ...f, boxPrice: Number(e.target.value) }))}
+                    placeholder="5500"
+                    className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+                  />
+                </div>
+              </>
+            )}
+
+            <div>
+              <label className="text-xs font-semibold text-muted uppercase tracking-wide block mb-1.5">
+                Low Stock Threshold (in {form.unitName || "units"})
+              </label>
+              <input
+                type="number"
+                value={form.lowStockThreshold}
+                onChange={(e) => setForm((f) => ({ ...f, lowStockThreshold: Number(e.target.value) }))}
+                placeholder="100"
+                className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+              />
+            </div>
 
             {formError && (
               <div className="text-danger text-xs bg-danger/10 border border-danger/20 rounded-[var(--radius-sm)] px-3 py-2">

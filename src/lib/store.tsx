@@ -39,7 +39,8 @@ type Action =
   | { type: "DELETE_BANK"; id: string }
   | { type: "SET_BANKS"; payload: Bank[] }
   | { type: "SET_PRODUCTS"; payload: Product[] }
-  | { type: "SET_CLIENTS"; payload: Client[] };
+  | { type: "SET_CLIENTS"; payload: Client[] }
+  | { type: "SET_STOCK_MOVEMENTS"; payload: StockMovement[] };
 
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
@@ -81,6 +82,8 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, products: action.payload };
     case "SET_CLIENTS":
       return { ...state, clients: action.payload };
+    case "SET_STOCK_MOVEMENTS":
+      return { ...state, stockMovements: action.payload };
     case "ADD_CLIENT":
       return { ...state, clients: [...state.clients, action.payload] };
     case "UPDATE_CLIENT":
@@ -164,6 +167,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               phone: profile.phone,
             },
           });
+          if (!localStorage.getItem("sf_session_started")) {
+            localStorage.setItem("sf_session_started", Date.now().toString());
+          }
         }
       }
     }
@@ -176,6 +182,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     );
 
     return () => listener.subscription.unsubscribe();
+  }, []);
+
+  // Enforce a 24h session limit ourselves, since Supabase's built-in
+  // session timeout setting requires the Pro plan.
+  useEffect(() => {
+    function checkExpiry() {
+      const startedAt = localStorage.getItem("sf_session_started");
+      if (startedAt && Date.now() - Number(startedAt) > 24 * 60 * 60 * 1000) {
+        localStorage.removeItem("sf_session_started");
+        supabase.auth.signOut();
+        dispatch({ type: "SET_USER", payload: null });
+      }
+    }
+    checkExpiry();
+    const interval = setInterval(checkExpiry, 60 * 1000);
+    return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
@@ -215,6 +237,38 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (data) dispatch({ type: "SET_CLIENTS", payload: data });
     }
     if (state.user) loadClients();
+  }, [state.user?.id]);
+
+  useEffect(() => {
+    async function loadStockMovements() {
+      const { data } = await supabase
+        .from("stock_movements")
+        .select("*")
+        .order("created_at");
+      if (data) {
+        dispatch({
+          type: "SET_STOCK_MOVEMENTS",
+          payload: data.map((m: any) => ({
+            id: m.id,
+            productId: m.product_id,
+            date: m.date,
+            type: m.type,
+            agentId: m.agent_id ?? undefined,
+            customerName: m.customer_name ?? undefined,
+            location: m.location ?? undefined,
+            isReturn: m.is_return,
+            unit: m.unit,
+            enteredQty: m.entered_qty,
+            baseQty: m.base_qty,
+            stockIn: m.stock_in,
+            stockOut: m.stock_out,
+            balance: m.balance,
+            createdBy: m.created_by,
+          })),
+        });
+      }
+    }
+    if (state.user) loadStockMovements();
   }, [state.user?.id]);
 
   return (

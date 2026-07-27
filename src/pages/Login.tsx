@@ -5,7 +5,7 @@ import { supabase } from "../lib/supabase";
 import { useTypewriter } from "../lib/useTypewriter";
 import Swal from "sweetalert2";
 
-export default function Login() {
+export default function Login({ onLoginSuccess }: { onLoginSuccess?: () => void }) {
   const { dispatch } = useStore();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -67,6 +67,8 @@ export default function Login() {
       .from("auth_logs")
       .insert({ user_id: profile.id, event: "login" });
 
+    localStorage.setItem("sf_session_started", Date.now().toString());
+
     dispatch({
       type: "SET_USER",
       payload: {
@@ -79,6 +81,7 @@ export default function Login() {
     });
 
     setLoading(false);
+    onLoginSuccess?.();
   };
 
   return (

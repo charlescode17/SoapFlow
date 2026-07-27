@@ -33,6 +33,59 @@ export default function Dashboard({ setPage }: Props) {
   const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening'
   const dateStr = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
 
+  const isStockAgent = state.user?.role === 'stock_agent'
+
+  if (isStockAgent) {
+    const activeProducts = products.filter(p => !p.deleted)
+    return (
+      <div className="p-8 max-w-6xl">
+        <div className="mb-8">
+          <h1 className="text-2xl font-bold text-foreground">{greeting}, {state.user?.name.split(' ')[0]} 👋</h1>
+          <p className="text-muted text-sm mt-1">{dateStr}</p>
+        </div>
+
+        <h2 className="text-sm font-semibold text-foreground mb-4">Products ({activeProducts.length})</h2>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+          {activeProducts.map(p => {
+            const baseStock = currentStock(stockMovements, p.id)
+            const boxes = p.piecesPerBox ? Math.floor(baseStock / p.piecesPerBox) : null
+            const remainder = p.piecesPerBox ? baseStock % p.piecesPerBox : baseStock
+            const value = baseStock * p.unitPrice
+            return (
+              <div key={p.id} className="bg-card border border-border rounded-[var(--radius-lg)] p-5">
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="w-9 h-9 rounded-[var(--radius)] bg-primary/10 flex items-center justify-center">
+                    <Package size={16} className="text-primary" />
+                  </div>
+                  <div className="text-sm font-semibold text-foreground">{p.name}</div>
+                </div>
+                <div className="text-lg font-bold text-foreground">
+                  {baseStock.toLocaleString()} {p.unitName}{baseStock !== 1 ? 's' : ''}
+                </div>
+                {boxes !== null && (
+                  <div className="text-xs text-muted mt-1">
+                    ≈ {boxes} box{boxes !== 1 ? 'es' : ''}{remainder > 0 ? ` + ${remainder} loose` : ''}
+                  </div>
+                )}
+                <div className="text-xs text-muted mt-2 pt-2 border-t border-border/60">
+                  Value: <span className="font-mono text-foreground">{fmt(value)}</span>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+
+        <div className="bg-card border border-border rounded-[var(--radius-lg)] p-5 max-w-sm">
+          <div className="text-xs text-muted mb-1">Stock Value (All Products)</div>
+          <div className="text-xl font-bold text-foreground">
+            {fmt(activeProducts.reduce((s, p) => s + currentStock(stockMovements, p.id) * p.unitPrice, 0))}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   const activeReports = agentReports.filter(r => !r.deleted)
   const totalRevenue = activeReports.filter(r => r.paymentStatus === 'paid').reduce((s, r) => s + r.totalPrice, 0)
   const totalPaid = payments.reduce((s, p) => s + p.amount, 0)
