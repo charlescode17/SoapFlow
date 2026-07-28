@@ -1,4 +1,14 @@
 export type Role = "manager" | "marketing_agent" | "stock_agent";
+
+export function normalizeRole(role?: string): Role {
+  if (!role) return "marketing_agent";
+  const r = role.toLowerCase().trim().replace(/[-\s]/g, "_");
+  if (r === "manager" || r === "stock_agent" || r === "marketing_agent") {
+    return r as Role;
+  }
+  return "marketing_agent";
+}
+
 export type StockType = "production" | "marketing_agent" | "customer_sale" | "other";
 export type PaymentStatus = "paid" | "loan";
 export type PaymentMode = "cash" | "bank" | "telephone";
@@ -37,6 +47,8 @@ export interface Product {
   unitPrice: number;         // solo/piece price
   piecesPerBox: number | null;
   boxPrice: number | null;
+  qtyPerBox?: number | null;  // legacy compatibility
+  pricePerBox?: number | null;// legacy compatibility
   lowStockThreshold: number; // in base units (pieces)
   deleted: boolean;
 }
@@ -48,6 +60,8 @@ export interface Client {
   district: string;
   sector: string;
   center: string;
+  agentId?: string;
+  handlerId?: string;
   deleted: boolean;
 }
 

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { StoreProvider, useStore } from "./lib/store";
 import { Layout } from "./components/Layout";
 import { SessionTransition } from "./components/SessionTransition";
@@ -14,12 +14,38 @@ import Loans from "./pages/Loans";
 import Payments from "./pages/Payments";
 import Report from "./pages/Report";
 import Settings from "./pages/Settings";
-import type { Page } from "./lib/types";
+import { normalizeRole, type Page } from "./lib/types";
+
+const ROLE_ALLOWED_PAGES: Record<string, Page[]> = {
+  manager: [
+    "dashboard",
+    "agents",
+    "products",
+    "clients",
+    "stock",
+    "reports",
+    "loans",
+    "payments",
+    "report",
+    "settings",
+  ],
+  marketing_agent: ["dashboard", "clients", "reports", "loans", "payments", "settings"],
+  stock_agent: ["dashboard", "products", "stock", "report", "settings"],
+};
 
 function AppInner() {
   const { state, dispatch } = useStore();
   const [page, setPage] = useState<Page>("dashboard");
   const [transitionPhase, setTransitionPhase] = useState<"hidden" | "showing" | "fading">("hidden");
+
+  const userRole = normalizeRole(state.user?.role);
+  const allowedPages = ROLE_ALLOWED_PAGES[userRole] ?? ROLE_ALLOWED_PAGES.manager;
+
+  useEffect(() => {
+    if (state.user && !allowedPages.includes(page)) {
+      setPage(allowedPages[0] || "dashboard");
+    }
+  }, [state.user, page, allowedPages]);
 
   const handleLoginSuccess = () => {
     setTransitionPhase("showing");

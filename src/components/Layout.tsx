@@ -18,7 +18,7 @@ import {
   Menu,
   X,
 } from "lucide-react";
-import type { Page, User } from "../lib/types";
+import { normalizeRole, type Page, type User } from "../lib/types";
 
 const NAV: {
   id: Page;
@@ -156,7 +156,8 @@ export function Layout({ page, setPage, user, onLogout, children }: Props) {
         {/* Nav — compact spacing, no wasted vertical space */}
         <nav className="flex-1 overflow-y-auto overflow-x-hidden py-3 px-2.5">
           {groups.map((group) => {
-            const allowedPages = ROLE_PAGES[user.role] ?? ALL_PAGES;
+            const role = normalizeRole(user.role);
+            const allowedPages = ROLE_PAGES[role] ?? ALL_PAGES;
             const items = NAV.filter(
               (n) => (n.group ?? "") === group && allowedPages.includes(n.id),
             );

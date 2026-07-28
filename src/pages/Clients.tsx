@@ -15,21 +15,24 @@ import { supabase } from "../lib/supabase";
 import { Modal } from "../components/Modal";
 import { Confirm } from "../components/Confirm";
 import { fmt } from "../lib/utils";
-import type { Client } from "../lib/types";
+import { normalizeRole, type Client } from "../lib/types";
 import Swal from "sweetalert2";
-const EMPTY: Omit<Client, "id" | "deleted"> = {
+const EMPTY = {
   name: "",
   phone: "",
   district: "",
   sector: "",
   center: "",
+  agentId: "",
 };
 
 type ViewMode = "list" | "grid";
 
 export default function Clients() {
   const { state, dispatch } = useStore();
-  const canEdit = state.user?.role === "manager";
+  const role = normalizeRole(state.user?.role);
+  const canEdit = role === "manager" || role === "marketing_agent";
+  const canDelete = role === "manager";
   const clients = state.clients.filter((c) => !c.deleted);
 
   const [search, setSearch] = useState("");
@@ -92,7 +95,10 @@ export default function Clients() {
   };
 
   const openAdd = () => {
-    setForm(EMPTY);
+    setForm({
+      ...EMPTY,
+      agentId: role === "marketing_agent" ? state.user?.id || "" : "",
+    });
     setFormError("");
     setModal("add");
   };
@@ -104,6 +110,7 @@ export default function Clients() {
       district: c.district,
       sector: c.sector,
       center: c.center,
+      agentId: c.agentId || c.handlerId || "",
     });
     setFormError("");
     setModal("edit");
@@ -118,6 +125,8 @@ export default function Clients() {
     setFormError("");
     setSaving(true);
 
+    const agentIdToSave = form.agentId || (role === "marketing_agent" ? state.user.id : null);
+
     if (modal === "add") {
       const { data, error } = await supabase
         .from("clients")
@@ -127,6 +136,7 @@ export default function Clients() {
           district: form.district || null,
           sector: form.sector || null,
           center: form.center.trim() || null,
+          agent_id: agentIdToSave,
         })
         .select()
         .single();
@@ -137,16 +147,28 @@ export default function Clients() {
         return;
       }
 
-      dispatch({ type: "ADD_CLIENT", payload: { ...data, deleted: false } });
-
-      await supabase.from("activity_logs").insert({
-        actor_id: state.user.id,
-        actor_name: state.user.name,
-        action: "created",
-        entity_type: "client",
-        entity_id: data.id,
-        entity_name: data.name,
+      dispatch({
+        type: "ADD_CLIENT",
+        payload: {
+          ...data,
+          agentId: data.agent_id,
+          handlerId: data.agent_id,
+          deleted: false,
+        },
       });
+
+      try {
+        await supabase.from("activity_logs").insert({
+          actor_id: state.user.id,
+          actor_name: state.user.name,
+          action: "created",
+          entity_type: "client",
+          entity_id: data.id,
+          entity_name: data.name,
+        });
+      } catch (e) {
+        console.warn("activity_logs failure", e);
+      }
     } else if (editing) {
       const { error } = await supabase
         .from("clients")
@@ -156,6 +178,7 @@ export default function Clients() {
           district: form.district || null,
           sector: form.sector || null,
           center: form.center.trim() || null,
+          agent_id: agentIdToSave,
         })
         .eq("id", editing.id);
 
@@ -165,16 +188,28 @@ export default function Clients() {
         return;
       }
 
-      dispatch({ type: "UPDATE_CLIENT", payload: { ...editing, ...form } });
-
-      await supabase.from("activity_logs").insert({
-        actor_id: state.user.id,
-        actor_name: state.user.name,
-        action: "updated",
-        entity_type: "client",
-        entity_id: editing.id,
-        entity_name: form.name.trim(),
+      dispatch({
+        type: "UPDATE_CLIENT",
+        payload: {
+          ...editing,
+          ...form,
+          agentId: agentIdToSave || undefined,
+          handlerId: agentIdToSave || undefined,
+        },
       });
+
+      try {
+        await supabase.from("activity_logs").insert({
+          actor_id: state.user.id,
+          actor_name: state.user.name,
+          action: "updated",
+          entity_type: "client",
+          entity_id: editing.id,
+          entity_name: form.name.trim(),
+        });
+      } catch (e) {
+        console.warn("activity_logs failure", e);
+      }
     }
     closeModal();
   };
@@ -590,6 +625,23 @@ export default function Clients() {
                 placeholder="e.g. Gikondo Market"
                 className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
               />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="text-xs font-semibold text-muted uppercase tracking-wide block mb-1.5">
+                Handler (Assigned Marketing Agent)
+              </label>
+              <select
+                value={form.agentId}
+                onChange={setF("agentId")}
+                className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] bg-white focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+              >
+                <option value="">Select Marketing Agent (Handler)</option>
+                {state.agents.filter(a => !a.deleted).map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                  </option>
+                ))}
+              </select>
             </div>
             {formError && (
               <div className="sm:col-span-2 text-danger text-xs bg-danger/10 border border-danger/20 rounded-[var(--radius-sm)] px-3 py-2">

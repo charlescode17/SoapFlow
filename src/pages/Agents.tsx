@@ -470,7 +470,7 @@ export default function Agents() {
                 onChange={(e) =>
                   setAddForm((f) => ({ ...f, name: e.target.value }))
                 }
-                placeholder="e.g. Sabira Mukamana"
+                placeholder="e.g. Jean Damascene"
                 className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
               />
             </div>

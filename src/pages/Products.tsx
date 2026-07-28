@@ -13,13 +13,14 @@ import { supabase } from "../lib/supabase";
 import { Modal } from "../components/Modal";
 import { Confirm } from "../components/Confirm";
 import { fmt } from "../lib/utils";
-import type { Product } from "../lib/types";
+import { normalizeRole, type Product } from "../lib/types";
 import Swal from "sweetalert2";
 
 function currentStock(
   movements: ReturnType<typeof useStore>["state"]["stockMovements"],
   productId: string,
 ) {
+  if (!Array.isArray(movements)) return 0;
   const filtered = movements.filter((m) => m.productId === productId);
   return filtered.length ? filtered[filtered.length - 1].balance : 0;
 }
@@ -38,8 +39,9 @@ type ViewMode = "list" | "grid";
 
 export default function Products() {
   const { state, dispatch } = useStore();
-  const canEdit = state.user?.role === "manager" || state.user?.role === "stock_agent";
-  const canDelete = state.user?.role === "manager";
+  const role = normalizeRole(state.user?.role);
+  const canEdit = role === "manager" || role === "stock_agent";
+  const canDelete = role === "manager";
   const products = state.products.filter((p) => !p.deleted);
 
   const [view, setView] = useState<ViewMode>("list");
@@ -57,15 +59,19 @@ export default function Products() {
     setModal("add");
   };
   const openEdit = (p: Product) => {
+    const pieces = p.piecesPerBox ?? p.qtyPerBox ?? null;
+    const box = p.boxPrice ?? p.pricePerBox ?? null;
+    const hasBoxing = pieces !== null || box !== null;
+
     setEditing(p);
     setForm({
-      name: p.name,
-      unitName: p.unitName,
-      unitPrice: p.unitPrice,
-      hasBoxing: p.piecesPerBox !== null,
-      piecesPerBox: p.piecesPerBox ?? 20,
-      boxPrice: p.boxPrice ?? 0,
-      lowStockThreshold: p.lowStockThreshold,
+      name: p.name || "",
+      unitName: p.unitName || "piece",
+      unitPrice: p.unitPrice ?? 0,
+      hasBoxing: hasBoxing,
+      piecesPerBox: pieces ?? 20,
+      boxPrice: box ?? 0,
+      lowStockThreshold: p.lowStockThreshold ?? 100,
     });
     setFormError("");
     setModal("edit");
@@ -80,16 +86,21 @@ export default function Products() {
     setFormError("");
     setSaving(true);
 
+    const piecesVal = form.hasBoxing ? Number(form.piecesPerBox) || null : null;
+    const boxPriceVal = form.hasBoxing ? Number(form.boxPrice) || null : null;
+    const unitPriceVal = Number(form.unitPrice) || 0;
+    const lowStockVal = Number(form.lowStockThreshold) || 100;
+
     if (modal === "add") {
       const { data, error } = await supabase
         .from("products")
         .insert({
           name: form.name.trim(),
           unit_name: form.unitName.trim() || "piece",
-          unit_price: form.unitPrice,
-          pieces_per_box: form.hasBoxing ? form.piecesPerBox : null,
-          box_price: form.hasBoxing ? form.boxPrice : null,
-          low_stock_threshold: form.lowStockThreshold,
+          unit_price: unitPriceVal,
+          pieces_per_box: piecesVal,
+          box_price: boxPriceVal,
+          low_stock_threshold: lowStockVal,
         })
         .select()
         .single();
@@ -105,33 +116,39 @@ export default function Products() {
         payload: {
           id: data.id,
           name: data.name,
-          unitName: data.unit_name,
-          unitPrice: data.unit_price,
-          piecesPerBox: data.pieces_per_box,
-          boxPrice: data.box_price,
-          lowStockThreshold: data.low_stock_threshold,
+          unitName: data.unit_name ?? "piece",
+          unitPrice: data.unit_price ?? unitPriceVal,
+          piecesPerBox: data.pieces_per_box ?? piecesVal,
+          boxPrice: data.box_price ?? boxPriceVal,
+          qtyPerBox: data.pieces_per_box ?? piecesVal,
+          pricePerBox: data.box_price ?? boxPriceVal,
+          lowStockThreshold: data.low_stock_threshold ?? lowStockVal,
           deleted: false,
         },
       });
 
-      await supabase.from("activity_logs").insert({
-        actor_id: state.user.id,
-        actor_name: state.user.name,
-        action: "created",
-        entity_type: "product",
-        entity_id: data.id,
-        entity_name: data.name,
-      });
+      try {
+        await supabase.from("activity_logs").insert({
+          actor_id: state.user.id,
+          actor_name: state.user.name,
+          action: "created",
+          entity_type: "product",
+          entity_id: data.id,
+          entity_name: data.name,
+        });
+      } catch (e) {
+        console.warn("Could not write activity log", e);
+      }
     } else if (editing) {
       const { error } = await supabase
         .from("products")
         .update({
           name: form.name.trim(),
           unit_name: form.unitName.trim() || "piece",
-          unit_price: form.unitPrice,
-          pieces_per_box: form.hasBoxing ? form.piecesPerBox : null,
-          box_price: form.hasBoxing ? form.boxPrice : null,
-          low_stock_threshold: form.lowStockThreshold,
+          unit_price: unitPriceVal,
+          pieces_per_box: piecesVal,
+          box_price: boxPriceVal,
+          low_stock_threshold: lowStockVal,
         })
         .eq("id", editing.id);
 
@@ -147,21 +164,27 @@ export default function Products() {
           ...editing,
           name: form.name.trim(),
           unitName: form.unitName.trim() || "piece",
-          unitPrice: form.unitPrice,
-          piecesPerBox: form.hasBoxing ? form.piecesPerBox : null,
-          boxPrice: form.hasBoxing ? form.boxPrice : null,
-          lowStockThreshold: form.lowStockThreshold,
+          unitPrice: unitPriceVal,
+          piecesPerBox: piecesVal,
+          boxPrice: boxPriceVal,
+          qtyPerBox: piecesVal,
+          pricePerBox: boxPriceVal,
+          lowStockThreshold: lowStockVal,
         },
       });
 
-      await supabase.from("activity_logs").insert({
-        actor_id: state.user.id,
-        actor_name: state.user.name,
-        action: "updated",
-        entity_type: "product",
-        entity_id: editing.id,
-        entity_name: form.name.trim(),
-      });
+      try {
+        await supabase.from("activity_logs").insert({
+          actor_id: state.user.id,
+          actor_name: state.user.name,
+          action: "updated",
+          entity_type: "product",
+          entity_id: editing.id,
+          entity_name: form.name.trim(),
+        });
+      } catch (e) {
+        console.warn("Could not write activity log", e);
+      }
     }
     closeModal();
   };
@@ -196,13 +219,6 @@ export default function Products() {
       entity_name: product?.name ?? "unknown",
     });
   };
-
-  const set =
-    (k: keyof typeof EMPTY) => (e: React.ChangeEvent<HTMLInputElement>) =>
-      setForm((f) => ({
-        ...f,
-        [k]: k === "name" ? e.target.value : Number(e.target.value),
-      }));
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-5xl">
@@ -297,7 +313,7 @@ export default function Products() {
                   {p.name}
                 </div>
                 <div className="text-xs text-muted mb-3">
-                  {p.qtyPerBox} bars/box · {fmt(p.pricePerBox)}/box
+                  {p.qtyPerBox ?? p.piecesPerBox ?? 1} {p.unitName ?? "piece"}s/box · {fmt(p.pricePerBox ?? p.boxPrice ?? 0)}/box
                 </div>
 
                 <div className="flex items-center justify-between pt-3 border-t border-border/60">
@@ -370,10 +386,10 @@ export default function Products() {
                         </div>
                       </td>
                       <td className="px-5 py-4 text-sm text-muted whitespace-nowrap">
-                        {p.qtyPerBox} bars/box
+                        {p.qtyPerBox ?? p.piecesPerBox ?? 1} {p.unitName ?? "piece"}s/box
                       </td>
                       <td className="px-5 py-4 text-sm font-mono text-foreground whitespace-nowrap">
-                        {fmt(p.pricePerBox)}
+                        {fmt(p.pricePerBox ?? p.boxPrice ?? 0)}
                       </td>
                       <td
                         className="px-5 py-4 text-sm font-mono whitespace-nowrap"
@@ -435,7 +451,7 @@ export default function Products() {
                       {p.name}
                     </div>
                     <div className="text-xs text-muted">
-                      {p.qtyPerBox} bars/box · {fmt(p.pricePerBox)}/box
+                      {p.qtyPerBox ?? p.piecesPerBox ?? 1} {p.unitName ?? "piece"}s/box · {fmt(p.pricePerBox ?? p.boxPrice ?? 0)}/box
                     </div>
                     <div className="flex items-center gap-2 mt-1">
                       <span
@@ -499,18 +515,18 @@ export default function Products() {
             <div>
               <label className="text-xs font-semibold text-muted uppercase tracking-wide block mb-1.5">Unit Name</label>
               <input
-                value={form.unitName}
+                // value={form.unitName}
                 onChange={(e) => setForm((f) => ({ ...f, unitName: e.target.value }))}
                 placeholder="e.g. bar, bottle, piece"
                 className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
               />
             </div>
             <div>
-              <label className="text-xs font-semibold text-muted uppercase tracking-wide block mb-1.5">Solo Price per {form.unitName || "unit"} (RWF)</label>
+              <label className="text-xs font-semibold text-muted uppercase tracking-wide block mb-1.5">Unit Price per {form.unitName || "unit"} (RWF)</label>
               <input
                 type="number"
-                value={form.unitPrice}
-                onChange={(e) => setForm((f) => ({ ...f, unitPrice: Number(e.target.value) }))}
+                // value={form.unitPrice === 0 ? "" : form.unitPrice}
+                onChange={(e) => setForm((f) => ({ ...f, unitPrice: e.target.value === "" ? 0 : Number(e.target.value) }))}
                 placeholder="150"
                 className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
               />
@@ -532,9 +548,9 @@ export default function Products() {
                   <label className="text-xs font-semibold text-muted uppercase tracking-wide block mb-1.5">{form.unitName || "Units"} per Box</label>
                   <input
                     type="number"
-                    value={form.piecesPerBox}
-                    onChange={(e) => setForm((f) => ({ ...f, piecesPerBox: Number(e.target.value) }))}
-                    placeholder="20"
+                    // value={form.piecesPerBox === 0 ? "" : form.piecesPerBox}
+                    onChange={(e) => setForm((f) => ({ ...f, piecesPerBox: e.target.value === "" ? 0 : Number(e.target.value) }))}
+                    placeholder=""
                     className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
                   />
                 </div>
@@ -542,8 +558,8 @@ export default function Products() {
                   <label className="text-xs font-semibold text-muted uppercase tracking-wide block mb-1.5">Box Price (RWF)</label>
                   <input
                     type="number"
-                    value={form.boxPrice}
-                    onChange={(e) => setForm((f) => ({ ...f, boxPrice: Number(e.target.value) }))}
+                    value={form.boxPrice === 0 ? "" : form.boxPrice}
+                    onChange={(e) => setForm((f) => ({ ...f, boxPrice: e.target.value === "" ? 0 : Number(e.target.value) }))}
                     placeholder="5500"
                     className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
                   />
@@ -553,13 +569,13 @@ export default function Products() {
 
             <div>
               <label className="text-xs font-semibold text-muted uppercase tracking-wide block mb-1.5">
-                Low Stock Threshold (in {form.unitName || "units"})
+                Low Stock  (in {form.unitName || "units"})
               </label>
               <input
                 type="number"
-                value={form.lowStockThreshold}
+                // value={form.lowStockThreshold}
                 onChange={(e) => setForm((f) => ({ ...f, lowStockThreshold: Number(e.target.value) }))}
-                placeholder="100"
+                placeholder=""
                 className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
               />
             </div>

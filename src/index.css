@@ -39,3 +39,55 @@ body {
 *::-webkit-scrollbar { width: 4px; height: 4px; }
 *::-webkit-scrollbar-track { background: transparent; }
 *::-webkit-scrollbar-thumb { background: #D1DAD7; border-radius: 4px; }
+
+@media print {
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    font-size: 11px !important;
+  }
+  .no-print,
+  button,
+  aside,
+  nav,
+  header {
+    display: none !important;
+  }
+  .max-w-7xl, .max-w-6xl, .max-w-5xl {
+    max-width: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+  .bg-card {
+    border: 1px solid #e2e8f0 !important;
+    box-shadow: none !important;
+  }
+  table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+  }
+  thead {
+    display: table-header-group !important;
+  }
+  tfoot {
+    display: table-footer-group !important;
+    font-weight: bold !important;
+  }
+  tr {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+  tbody tr:nth-child(even) {
+    background-color: #f8fafc !important;
+  }
+  th, td {
+    padding: 8px 12px !important;
+    border-bottom: 1px solid #e2e8f0 !important;
+    font-size: 11px !important;
+  }
+}
+@media print {
+  .no-print {
+    display: none !important;
+  }
+}

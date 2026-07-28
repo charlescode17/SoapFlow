@@ -21,8 +21,7 @@ import {
 import { useStore } from "../lib/store";
 import { Confirm } from "../components/Confirm";
 import { supabase } from "../lib/supabase";
-import type { Role } from "../lib/types";
-import { uid } from "../lib/utils";
+import { normalizeRole, type Role } from "../lib/types";
 import Swal from "sweetalert2";
 
 type Theme = "light" | "dark" | "system";
@@ -63,13 +62,20 @@ const LIMITED_SECTION_IDS: Section[] = ["account", "appearance", "language"];
 
 export default function Settings() {
   const { state, dispatch } = useStore();
-  const canEdit = state.user?.role === "manager";
+  const userRole = normalizeRole(state.user?.role);
+  const canEdit = userRole === "manager";
   const SECTIONS = canEdit
     ? SECTIONS_ALL
     : SECTIONS_ALL.filter((s) => LIMITED_SECTION_IDS.includes(s.id));
   const [newBank, setNewBank] = useState("");
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [section, setSection] = useState<Section>("account");
+
+  useEffect(() => {
+    if (!SECTIONS.some((s) => s.id === section)) {
+      setSection("account");
+    }
+  }, [SECTIONS, section]);
 
   // --- Account editing ---
   const [accountForm, setAccountForm] = useState({

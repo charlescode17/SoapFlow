@@ -37,6 +37,7 @@ type Action =
   | { type: "ADD_PAYMENT"; payload: Payment }
   | { type: "ADD_BANK"; payload: Bank }
   | { type: "DELETE_BANK"; id: string }
+  | { type: "SET_AGENTS"; payload: Agent[] }
   | { type: "SET_BANKS"; payload: Bank[] }
   | { type: "SET_PRODUCTS"; payload: Product[] }
   | { type: "SET_CLIENTS"; payload: Client[] }
@@ -46,6 +47,8 @@ function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "SET_USER":
       return { ...state, user: action.payload };
+    case "SET_AGENTS":
+      return { ...state, agents: action.payload };
     case "ADD_AGENT":
       return { ...state, agents: [...state.agents, action.payload] };
     case "UPDATE_AGENT":
@@ -201,6 +204,35 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    async function loadAgents() {
+      const { data } = await supabase
+        .from("profiles")
+        .select("*")
+        .order("name");
+      if (data && data.length > 0) {
+        const marketingAgents = data.filter((p: any) => {
+          const r = (p.role || "").toLowerCase().trim().replace(/[-\s]/g, "_");
+          return r === "marketing_agent" || r === "agent" || r === "marketingagent";
+        });
+        const finalAgents = marketingAgents.length > 0 ? marketingAgents : data;
+        dispatch({
+          type: "SET_AGENTS",
+          payload: finalAgents.map((a: any) => ({
+            id: a.id,
+            name: a.name || a.email || "Unnamed Agent",
+            phone: a.phone || "",
+            createdAt: a.created_at || new Date().toISOString(),
+            deleted: false,
+          })),
+        });
+      } else {
+        dispatch({ type: "SET_AGENTS", payload: [] });
+      }
+    }
+    if (state.user) loadAgents();
+  }, [state.user?.id]);
+
+  useEffect(() => {
     async function loadBanks() {
       const { data } = await supabase.from("banks").select("*").order("name");
       if (data) dispatch({ type: "SET_BANKS", payload: data });
@@ -217,14 +249,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (data) {
         dispatch({
           type: "SET_PRODUCTS",
-          payload: data.map((p: any) => ({
-            id: p.id,
-            name: p.name,
-            qtyPerBox: p.qty_per_box,
-            pricePerBox: p.price_per_box,
-            lowStockThreshold: p.low_stock_threshold,
-            deleted: p.deleted,
-          })),
+          payload: data.map((p: any) => {
+            const piecesPerBox = p.pieces_per_box ?? p.qty_per_box ?? null;
+            const boxPrice = p.box_price ?? p.price_per_box ?? null;
+            const unitPrice =
+              p.unit_price ??
+              (boxPrice && piecesPerBox ? boxPrice / piecesPerBox : boxPrice ?? 0);
+            return {
+              id: p.id,
+              name: p.name,
+              unitName: p.unit_name ?? "piece",
+              unitPrice: Number(unitPrice ?? 0),
+              piecesPerBox: piecesPerBox ? Number(piecesPerBox) : null,
+              boxPrice: boxPrice ? Number(boxPrice) : null,
+              qtyPerBox: piecesPerBox ? Number(piecesPerBox) : null,
+              pricePerBox: boxPrice ? Number(boxPrice) : null,
+              lowStockThreshold: Number(p.low_stock_threshold ?? 100),
+              deleted: Boolean(p.deleted),
+            };
+          }),
         });
       }
     }
@@ -234,7 +277,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     async function loadClients() {
       const { data } = await supabase.from("clients").select("*").order("name");
-      if (data) dispatch({ type: "SET_CLIENTS", payload: data });
+      if (data) {
+        dispatch({
+          type: "SET_CLIENTS",
+          payload: data.map((c: any) => ({
+            id: c.id,
+            name: c.name,
+            phone: c.phone,
+            district: c.district,
+            sector: c.sector,
+            center: c.center,
+            agentId: c.agent_id ?? c.agentId ?? c.handler_id ?? c.handlerId,
+            handlerId: c.agent_id ?? c.agentId ?? c.handler_id ?? c.handlerId,
+            deleted: Boolean(c.deleted),
+          })),
+        });
+      }
     }
     if (state.user) loadClients();
   }, [state.user?.id]);

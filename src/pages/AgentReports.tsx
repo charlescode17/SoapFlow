@@ -13,6 +13,7 @@ import { Modal } from "../components/Modal";
 import { Confirm } from "../components/Confirm";
 import { fmt, fmtDate, uid, today } from "../lib/utils";
 import type { AgentReport, PaymentStatus } from "../lib/types";
+import { normalizeRole } from "../lib/types";
 
 type DateFilter = "all" | "daily" | "weekly" | "monthly" | "annual";
 type ViewMode = "list" | "grid";
@@ -37,7 +38,9 @@ function inRange(date: string, filter: DateFilter): boolean {
 
 export default function AgentReports() {
   const { state, dispatch } = useStore();
-  const canEdit = state.user?.role === "manager";
+  const role = normalizeRole(state.user?.role);
+  const canEdit = role === "manager" || role === "marketing_agent";
+  const canDelete = role === "manager";
   const reports = state.agentReports.filter((r) => !r.deleted);
   const agents = state.agents.filter((a) => !a.deleted);
   const clients = state.clients.filter((c) => !c.deleted);
@@ -92,8 +95,8 @@ export default function AgentReports() {
   const openAdd = () => {
     setForm({
       date: today(),
-      agentId: "",
-      clientId: "",
+      agentId: role === "marketing_agent" ? state.user?.id || agents[0]?.id || "" : agents[0]?.id || "",
+      clientId: clients[0]?.id || "",
       productId: defaultProduct?.id ?? "",
       qty: "",
       paymentStatus: "paid",
