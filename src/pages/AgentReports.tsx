@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Plus,
   Pencil,
@@ -43,9 +43,31 @@ export default function AgentReports() {
   const role = normalizeRole(state.user?.role);
   const canEdit = role === "manager" || role === "marketing_agent";
   const canDelete = role === "manager";
-  const reports = state.agentReports.filter((r) => !r.deleted);
+  const [marketingAgents, setMarketingAgents] = useState<{ id: string; name: string }[]>([]);
+
+  useEffect(() => {
+    async function loadMarketingAgents() {
+      const { data } = await supabase
+        .from("profiles")
+        .select("id, name")
+        .eq("role", "marketing_agent")
+        .order("name");
+      if (data) setMarketingAgents(data);
+    }
+    loadMarketingAgents();
+  }, []);
+
+  const getAgentName = (id?: string) =>
+    marketingAgents.find((a) => a.id === id)?.name ?? "—";
+  const reports = state.agentReports.filter(
+    (r) => !r.deleted && (role !== "marketing_agent" || r.agentId === state.user?.id),
+  );
   const agents = state.agents.filter((a) => !a.deleted);
-  const clients = state.clients.filter((c) => !c.deleted);
+  const clients = state.clients.filter(
+    (c) =>
+      !c.deleted &&
+      (role !== "marketing_agent" || c.agentId === state.user?.id || c.handlerId === state.user?.id),
+  );
   const products = state.products.filter((p) => !p.deleted);
 
   const [agentFilter, setAgentFilter] = useState("");
@@ -77,7 +99,7 @@ export default function AgentReports() {
     list.find((i) => i.id === id)?.name ?? "—";
 
   const filtered = reports.filter((r) => {
-    const agent = agents.find((a) => a.id === r.agentId);
+    const agent = marketingAgents.find((a) => a.id === r.agentId);
     const client = clients.find((c) => c.id === r.clientId);
     const matchSearch = search
       ? agent?.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -227,7 +249,7 @@ const [saving, setSaving] = useState(false);
     <div className="p-4 sm:p-6 lg:p-8 max-w-7xl">
       <div className="flex items-center justify-between mb-6 lg:mb-8">
         <div>
-          <h1 className="text-xl font-bold text-foreground">Agent Reports</h1>
+          <h1 className="text-xl font-bold text-foreground">Sales Reports</h1>
           <p className="text-sm text-muted mt-0.5">
             Sales records from marketing agents
           </p>
@@ -258,18 +280,20 @@ const [saving, setSaving] = useState(false);
           />
         </div>
         <div className="grid grid-cols-3 sm:flex gap-2 sm:gap-3">
-          <select
-            value={agentFilter}
-            onChange={(e) => setAgentFilter(e.target.value)}
-            className="px-2 sm:px-3 py-2.5 text-xs sm:text-sm border border-border rounded-[var(--radius)] bg-card focus:outline-none focus:ring-2 focus:ring-primary/30 min-w-0"
-          >
-            <option value="">All Agents</option>
-            {agents.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.name}
-              </option>
-            ))}
-          </select>
+          {role === "manager" && (
+            <select
+              value={agentFilter}
+              onChange={(e) => setAgentFilter(e.target.value)}
+              className="px-2 sm:px-3 py-2.5 text-xs sm:text-sm border border-border rounded-[var(--radius)] bg-card focus:outline-none focus:ring-2 focus:ring-primary/30 min-w-0"
+            >
+              <option value="">All Agents</option>
+              {marketingAgents.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+          )}
           <select
             value={dateFilter}
             onChange={(e) => setDateFilter(e.target.value as DateFilter)}
@@ -620,10 +644,11 @@ const [saving, setSaving] = useState(false);
               <select
                 value={form.agentId}
                 onChange={setF("agentId")}
-                className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] bg-white focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+                disabled={role === "marketing_agent"}
+                className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] bg-white focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary disabled:opacity-60"
               >
                 <option value="">Select agent</option>
-                {agents.map((a) => (
+                {marketingAgents.map((a) => (
                   <option key={a.id} value={a.id}>
                     {a.name}
                   </option>
@@ -758,8 +783,8 @@ const [saving, setSaving] = useState(false);
       {confirmId && (
         <Confirm
           message="Delete this report? The record will be permanently removed."
-          onConfirm={() => {
-            dispatch({ type: "DELETE_AGENT_REPORT", id: confirmId });
+          onConfirm={async () => {
+            await handleDelete(confirmId);
             setConfirmId(null);
           }}
           onCancel={() => setConfirmId(null)}

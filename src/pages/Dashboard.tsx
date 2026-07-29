@@ -359,10 +359,9 @@ export default function Dashboard({ setPage }: Props) {
   if (isMarketingAgent) {
     const currentUserId = state.user?.id
     const activeClientsList = clients.filter(c => !c.deleted)
-    
-    // Clients assigned to this marketing agent (or fallback to active clients if none assigned yet)
-    const assignedClients = activeClientsList.filter(c => c.agentId === currentUserId || c.handlerId === currentUserId)
-    const myClients = assignedClients.length > 0 ? assignedClients : activeClientsList
+
+    // Clients assigned to this marketing agent — strictly their own, never a fallback to everyone
+    const myClients = activeClientsList.filter(c => c.agentId === currentUserId || c.handlerId === currentUserId)
     const myClientIds = new Set(myClients.map(c => c.id))
 
     // Helper: calculate client outstanding loan
@@ -373,8 +372,8 @@ export default function Dashboard({ setPage }: Props) {
       return Math.max(0, totalLoan - totalPaid)
     }
 
-    // Reports created by me or for my clients
-    const myReports = agentReports.filter(r => !r.deleted && (r.createdBy === state.user?.name || r.agentId === currentUserId || myClientIds.has(r.clientId)))
+    // Reports for my clients only (agent_id is the reliable link, not the name string)
+    const myReports = agentReports.filter(r => !r.deleted && r.agentId === currentUserId)
     const myPaidRevenue = myReports.filter(r => r.paymentStatus === 'paid').reduce((s, r) => s + r.totalPrice, 0)
 
     // KPI Summary metrics requested by user:

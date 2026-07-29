@@ -33,7 +33,11 @@ export default function Clients() {
   const role = normalizeRole(state.user?.role);
   const canEdit = role === "manager" || role === "marketing_agent";
   const canDelete = role === "manager";
-  const clients = state.clients.filter((c) => !c.deleted);
+  const clients = state.clients.filter(
+    (c) =>
+      !c.deleted &&
+      (role !== "marketing_agent" || c.agentId === state.user?.id || c.handlerId === state.user?.id),
+  );
 
   const [search, setSearch] = useState("");
   const [districtFilter, setDistrictFilter] = useState("");
@@ -47,6 +51,22 @@ export default function Clients() {
 
   const [districts, setDistricts] = useState<string[]>([]);
   const [sectorOptions, setSectorOptions] = useState<string[]>([]);
+  const [marketingAgents, setMarketingAgents] = useState<{ id: string; name: string }[]>([]);
+
+  useEffect(() => {
+    async function loadMarketingAgents() {
+      const { data } = await supabase
+        .from("profiles")
+        .select("id, name")
+        .eq("role", "marketing_agent")
+        .order("name");
+      if (data) setMarketingAgents(data);
+    }
+    loadMarketingAgents();
+  }, []);
+
+  const getHandlerName = (id?: string) =>
+    marketingAgents.find((a) => a.id === id)?.name ?? "—";
 
   useEffect(() => {
     async function loadDistricts() {
@@ -405,6 +425,7 @@ export default function Clients() {
                     "District",
                     "Sector",
                     "Center",
+                    ...(role === "manager" ? ["Handler"] : []),
                     "Outstanding Loan",
                   ].map((h) => (
                     <th
@@ -453,6 +474,11 @@ export default function Clients() {
                       <td className="px-5 py-3.5 text-sm text-muted whitespace-nowrap">
                         {c.center}
                       </td>
+                      {role === "manager" && (
+                        <td className="px-5 py-3.5 text-sm text-muted whitespace-nowrap">
+                          {getHandlerName(c.agentId || c.handlerId)}
+                        </td>
+                      )}
                       <td className="px-5 py-3.5 whitespace-nowrap">
                         {loan > 0 ? (
                           <span className="text-sm font-mono text-secondary">
@@ -512,6 +538,11 @@ export default function Clients() {
                         .filter(Boolean)
                         .join(", ") || "—"}
                     </div>
+                    {role === "manager" && (
+                      <div className="text-[11px] text-muted mt-0.5">
+                        Handler: {getHandlerName(c.agentId || c.handlerId)}
+                      </div>
+                    )}
                     <div className="mt-1.5">
                       {loan > 0 ? (
                         <span className="text-xs font-mono text-secondary">
@@ -633,10 +664,11 @@ export default function Clients() {
               <select
                 value={form.agentId}
                 onChange={setF("agentId")}
-                className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] bg-white focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+                disabled={role === "marketing_agent"}
+                className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] bg-white focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary disabled:opacity-60"
               >
                 <option value="">Select Marketing Agent (Handler)</option>
-                {state.agents.filter(a => !a.deleted).map((a) => (
+                {marketingAgents.map((a) => (
                   <option key={a.id} value={a.id}>
                     {a.name}
                   </option>
