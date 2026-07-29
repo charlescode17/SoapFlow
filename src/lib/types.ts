@@ -81,12 +81,15 @@ export interface StockMovement {
   stockOut: number;
   balance: number;
   createdBy: string;
+  unitPrice?: number;   // NEW
+  totalPrice?: number;  // NEW
 }
 
 export interface AgentReport {
   id: string;
   agentId: string;
-  clientId: string;
+  clientId: string | null;
+  customerName?: string;
   productId: string;
   date: string;
   qty: number;
@@ -100,8 +103,8 @@ export interface AgentReport {
 export interface Payment {
   id: string;
   clientId: string;
-  agentId?: string;      // NEW — who recorded it
-  reportId?: string;     // NEW — which agent_report (loan) this pays down
+  agentId?: string;
+  reportId?: string;
   date: string;
   amount: number;
   mode: PaymentMode;

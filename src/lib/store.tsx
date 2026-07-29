@@ -333,6 +333,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             stockOut: m.stock_out,
             balance: m.balance,
             createdBy: m.created_by,
+            unitPrice: m.unit_price != null ? Number(m.unit_price) : undefined,
+            totalPrice: m.total_price != null ? Number(m.total_price) : undefined,
           })),
         });
       }
@@ -381,7 +383,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           type: "SET_PAYMENTS",
           payload: data.map((p: any) => ({
             id: p.id,
-            clientId: p.client_id,
+            clientId: p.client_id ?? undefined,
             agentId: p.agent_id ?? undefined,
             reportId: p.report_id ?? undefined,
             date: p.date,

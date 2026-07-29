@@ -404,7 +404,16 @@ const agentMonthlyData = getLastMonths(6).map(({ key, label }) => {
       { label: 'Total Loans', value: `${totalLoansAmount.toLocaleString()} RWF`, sub: 'outstanding amount', color: '#E05C5C', icon: DollarSign },
       { label: 'Paid Revenue', value: `${myPaidRevenue.toLocaleString()} RWF`, sub: 'collected sales', color: '#3FA66B', icon: TrendingUp },
     ]
-
+    // NEW — stock accountability (what he's been given vs what he's given out)
+    const myDispatchedValue = stockMovements
+      .filter(m => m.type === 'marketing_agent' && m.agentId === currentUserId && !m.isReturn)
+      .reduce((s, m) => s + (m.totalPrice ?? 0), 0)
+    const myReturnedValue = stockMovements
+      .filter(m => m.type === 'marketing_agent' && m.agentId === currentUserId && m.isReturn)
+      .reduce((s, m) => s + (m.totalPrice ?? 0), 0)
+    const myStockLoan = Math.max(0, myDispatchedValue - myReturnedValue)
+    const myDistributedValue = myReports.reduce((s, r) => s + r.totalPrice, 0)
+    const myRemainingStock = Math.max(0, myStockLoan - myDistributedValue)
     return (
       <div className="p-4 sm:p-6 lg:p-8 max-w-7xl">
         {/* Header */}
@@ -435,6 +444,30 @@ const agentMonthlyData = getLastMonths(6).map(({ key, label }) => {
               <div className="text-[10px] text-muted/70 mt-0.5">{kpi.sub}</div>
             </div>
           ))}
+        </div>
+
+          {/* ── Stock Accountability ─────────────────────────────── */}
+        <div className="mb-6 lg:mb-8">
+          <h2 className="text-sm font-semibold text-foreground mb-3">Stock Accountability</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
+            <div className="bg-secondary/10 border border-secondary/20 rounded-[var(--radius-lg)] p-4 sm:p-5 hover:shadow-md hover:-translate-y-0.5 transition-all duration-200">
+              <div className="text-[11px] text-secondary uppercase tracking-wide mb-1">Stock Given to Me</div>
+              <div className="text-xl font-mono text-secondary">{myStockLoan.toLocaleString()} RWF</div>
+              <div className="text-[11px] text-muted mt-1">Dispatched minus returns</div>
+            </div>
+            <div className="bg-primary/10 border border-primary/20 rounded-[var(--radius-lg)] p-4 sm:p-5 hover:shadow-md hover:-translate-y-0.5 transition-all duration-200">
+              <div className="text-[11px] text-primary uppercase tracking-wide mb-1">Sales Distributed</div>
+              <div className="text-xl font-mono text-primary">{myDistributedValue.toLocaleString()} RWF</div>
+              <div className="text-[11px] text-muted mt-1">Given out to my clients</div>
+            </div>
+            <div className="bg-success/10 border border-success/20 rounded-[var(--radius-lg)] p-4 sm:p-5 hover:shadow-md hover:-translate-y-0.5 transition-all duration-200">
+              <div className="text-[11px] text-success uppercase tracking-wide mb-1">Still in My Hands</div>
+              <div className="text-xl font-mono text-success">{myRemainingStock.toLocaleString()} RWF</div>
+              <button onClick={() => setPage('loans')} className="text-[11px] text-success/80 hover:underline mt-1 block">
+                View full breakdown →
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* Charts Row: Revenue vs Loans */}

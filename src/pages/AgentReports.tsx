@@ -80,10 +80,14 @@ export default function AgentReports() {
   const [confirmId, setConfirmId] = useState<string | null>(null);
 
   const defaultProduct = products[0];
+  const [saleType, setSaleType] = useState<"client" | "walkin">("client");
+  const [walkinMode, setWalkinMode] = useState<"cash" | "telephone">("cash");
+  const [walkinReceiver, setWalkinReceiver] = useState(state.user?.name ?? "");
   const [form, setForm] = useState({
     date: today(),
     agentId: "",
     clientId: "",
+    customerName: "",
     productId: defaultProduct?.id ?? "",
     qty: "",
     paymentStatus: "paid" as PaymentStatus,
@@ -97,6 +101,9 @@ export default function AgentReports() {
 
   const getName = (id: string, list: { id: string; name: string }[]) =>
     list.find((i) => i.id === id)?.name ?? "—";
+
+  const getBuyerLabel = (r: AgentReport) =>
+    r.clientId ? getName(r.clientId, clients) : r.customerName?.trim() || "Walk-in customer";
 
   const filtered = reports.filter((r) => {
     const agent = marketingAgents.find((a) => a.id === r.agentId);
@@ -117,10 +124,12 @@ export default function AgentReports() {
   const totalAmt = filtered.reduce((s, r) => s + r.totalPrice, 0);
 
   const openAdd = () => {
+    setSaleType("client");
     setForm({
       date: today(),
       agentId: role === "marketing_agent" ? state.user?.id || agents[0]?.id || "" : agents[0]?.id || "",
       clientId: clients[0]?.id || "",
+      customerName: "",
       productId: defaultProduct?.id ?? "",
       qty: "",
       paymentStatus: "paid",
@@ -129,10 +138,12 @@ export default function AgentReports() {
   };
   const openEdit = (r: AgentReport) => {
     setEditing(r);
+    setSaleType(r.clientId ? "client" : "walkin");
     setForm({
       date: r.date,
       agentId: r.agentId,
-      clientId: r.clientId,
+      clientId: r.clientId ?? "",
+      customerName: r.customerName ?? "",
       productId: r.productId,
       qty: r.qty.toString(),
       paymentStatus: r.paymentStatus,
@@ -146,19 +157,52 @@ export default function AgentReports() {
 
 const [saving, setSaving] = useState(false);
 
+  const getAgentProductAvailable = (agentId: string, productId: string, excludeReportId?: string) => {
+    const dispatched = state.stockMovements
+      .filter((m) => m.type === "marketing_agent" && m.agentId === agentId && m.productId === productId && !m.isReturn)
+      .reduce((s, m) => s + m.stockOut, 0);
+    const returned = state.stockMovements
+      .filter((m) => m.type === "marketing_agent" && m.agentId === agentId && m.productId === productId && m.isReturn)
+      .reduce((s, m) => s + m.stockIn, 0);
+    const distributed = state.agentReports
+      .filter((r) => !r.deleted && r.agentId === agentId && r.productId === productId && r.id !== excludeReportId)
+      .reduce((s, r) => s + r.qty, 0);
+    return dispatched - returned - distributed;
+  };
+
+  const availableForSelectedProduct = form.agentId && form.productId
+    ? getAgentProductAvailable(form.agentId, form.productId, editing?.id)
+    : 0;
+  const piecesPerBoxForSelected = selectedProduct?.piecesPerBox ?? selectedProduct?.qtyPerBox ?? null;
+
   const handleSave = async () => {
-    if (!form.agentId || !form.clientId || !form.qty || !state.user) return;
+    if (!form.agentId || !form.qty || !state.user) return;
+    if (saleType === "client" && !form.clientId) return;
+
+    const requestedQty = parseFloat(form.qty);
+    const available = getAgentProductAvailable(form.agentId, form.productId, editing?.id);
+    if (requestedQty > available) {
+      Swal.fire({
+        icon: "warning",
+        title: "Not enough stock on hand",
+        text: `This agent has only ${available} box${available === 1 ? "" : "es"} of ${selectedProduct?.name ?? "this product"} available to distribute (dispatched minus returns and already-reported sales). You entered ${requestedQty}.`,
+        confirmButtonColor: "#2E9E8F",
+      });
+      return;
+    }
+
     setSaving(true);
 
     const payload = {
       agent_id: form.agentId,
-      client_id: form.clientId,
+      client_id: saleType === "client" ? form.clientId : null,
+      customer_name: saleType === "walkin" ? form.customerName.trim() || null : null,
       product_id: form.productId,
       date: form.date,
       qty: parseFloat(form.qty),
       unit_price: unitPrice,
       total_price: totalPrice,
-      payment_status: form.paymentStatus,
+      payment_status: saleType === "walkin" ? "paid" : "loan",
       created_by: state.user.name,
     };
 
@@ -179,6 +223,7 @@ const [saving, setSaving] = useState(false);
         id: data.id,
         agentId: data.agent_id,
         clientId: data.client_id,
+        customerName: data.customer_name ?? undefined,
         productId: data.product_id,
         date: data.date,
         qty: Number(data.qty),
@@ -190,14 +235,49 @@ const [saving, setSaving] = useState(false);
       };
       dispatch({ type: "ADD_AGENT_REPORT", payload: newReport });
 
+      const buyerLabel = saleType === "client" ? getName(form.clientId, clients) : (form.customerName.trim() || "Walk-in customer");
       await supabase.from("activity_logs").insert({
         actor_id: state.user.id,
         actor_name: state.user.name,
         action: "created",
         entity_type: "agent_report",
         entity_id: data.id,
-        entity_name: `${getName(form.clientId, clients)} — ${getName(form.productId, products)}`,
+        entity_name: `${buyerLabel} — ${getName(form.productId, products)}`,
       });
+
+      if (saleType === "walkin") {
+        const { data: payData, error: payError } = await supabase
+          .from("payments")
+          .insert({
+            client_id: null,
+            agent_id: form.agentId,
+            report_id: data.id,
+            date: form.date,
+            amount: totalPrice,
+            mode: walkinMode,
+            receiver_name: walkinMode === "telephone" ? walkinReceiver || null : null,
+            created_by: state.user.name,
+          })
+          .select()
+          .single();
+
+        if (!payError && payData) {
+          dispatch({
+            type: "ADD_PAYMENT",
+            payload: {
+              id: payData.id,
+              clientId: undefined,
+              agentId: payData.agent_id,
+              reportId: payData.report_id,
+              date: payData.date,
+              amount: Number(payData.amount),
+              mode: payData.mode,
+              receiverName: payData.receiver_name ?? undefined,
+            },
+          });
+        }
+      }
+    } else if (editing) {
     } else if (editing) {
       const { error } = await supabase
         .from("agent_reports")
@@ -215,13 +295,14 @@ const [saving, setSaving] = useState(false);
         payload: {
           ...editing,
           agentId: form.agentId,
-          clientId: form.clientId,
+          clientId: saleType === "client" ? form.clientId : null,
+          customerName: saleType === "walkin" ? form.customerName.trim() || undefined : undefined,
           productId: form.productId,
           date: form.date,
           qty: parseInt(form.qty),
           unitPrice,
           totalPrice,
-          paymentStatus: form.paymentStatus,
+          paymentStatus: saleType === "walkin" ? "paid" : form.paymentStatus,
         },
       });
     }
@@ -399,12 +480,14 @@ const [saving, setSaving] = useState(false);
                   {getName(r.agentId, agents)}
                 </div>
                 <div className="text-xs text-muted mb-1">
-                  → {getName(r.clientId, clients)}
+                  → {getBuyerLabel(r)}
                 </div>
-                {client && (
+                {client ? (
                   <div className="text-[11px] text-muted mb-3">
                     {client.district} · {client.sector}
                   </div>
+                ) : (
+                  <div className="text-[11px] text-muted mb-3 italic">Walk-in sale</div>
                 )}
 
                 <div className="grid grid-cols-3 gap-2 pt-3 border-t border-border/60 text-center">
@@ -500,7 +583,10 @@ const [saving, setSaving] = useState(false);
                         {getName(r.agentId, agents)}
                       </td>
                       <td className="px-4 py-3.5 text-sm text-foreground whitespace-nowrap">
-                        {getName(r.clientId, clients)}
+                        {getBuyerLabel(r)}
+                        {!r.clientId && (
+                          <span className="ml-1.5 text-[10px] font-semibold text-muted bg-accent/60 px-1.5 py-0.5 rounded-full">Walk-in</span>
+                        )}
                       </td>
                       <td className="px-4 py-3.5 text-xs text-muted whitespace-nowrap">
                         {client ? (
@@ -580,12 +666,14 @@ const [saving, setSaving] = useState(false);
                     {getName(r.agentId, agents)}
                   </div>
                   <div className="text-xs text-muted mb-1">
-                    → {getName(r.clientId, clients)}
+                    → {getBuyerLabel(r)}
                   </div>
-                  {client && (
+                  {client ? (
                     <div className="text-[11px] text-muted mb-2">
                       {client.district} · {client.sector}
                     </div>
+                  ) : (
+                    <div className="text-[11px] text-muted mb-2 italic">Walk-in sale</div>
                   )}
                   <div className="flex items-center justify-between">
                     <span className="text-xs text-muted">
@@ -621,7 +709,7 @@ const [saving, setSaving] = useState(false);
 
       {modal && (
         <Modal
-          title={modal === "add" ? "New Agent Report" : "Edit Report"}
+          title={modal === "add" ? "New Sales Report" : "Edit Report"}
           onClose={closeModal}
           wide
         >
@@ -656,23 +744,54 @@ const [saving, setSaving] = useState(false);
               </select>
             </div>
             <div className="sm:col-span-2">
-              <label className="text-xs text-muted uppercase tracking-wide block mb-1.5">
-                Client
+              <label className="text-xs text-muted uppercase tracking-wide block mb-2">
+                Buyer Type
               </label>
-              <select
-                value={form.clientId}
-                onChange={setF("clientId")}
-                className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] bg-white focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
-              >
-                <option value="">Select client</option>
-                {clients.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name} — {c.district}
-                  </option>
+              <div className="grid grid-cols-2 gap-2 mb-3">
+                {(["client", "walkin"] as const).map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setSaleType(t)}
+                    className={`py-2.5 text-sm font-medium rounded-[var(--radius)] border transition-colors ${
+                      saleType === t
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border text-muted hover:border-primary/30"
+                    }`}
+                  >
+                    {t === "client" ? "Existing Client" : "Walk-in Customer"}
+                  </button>
                 ))}
-              </select>
+              </div>
+
+              {saleType === "client" ? (
+                <select
+                  value={form.clientId}
+                  onChange={setF("clientId")}
+                  className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] bg-white focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+                >
+                  <option value="">Select client</option>
+                  {clients.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} — {c.district}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div>
+                  <input
+                    value={form.customerName}
+                    onChange={(e) => setForm((f) => ({ ...f, customerName: e.target.value }))}
+                    placeholder="Customer name (optional)"
+                    className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+                  />
+                  <p className="text-[11px] text-muted mt-1.5">
+                    Walk-in sales are always recorded as paid — no loan option, since there's no client record to track a balance against.
+                  </p>
+                </div>
+              )}
             </div>
-            {selectedClient && (
+            {saleType === "client" && selectedClient && (
               <div className="sm:col-span-2 grid grid-cols-3 gap-3 p-3 bg-accent/50 rounded-[var(--radius)] border border-border">
                 {[
                   { label: "District", value: selectedClient.district },
@@ -718,6 +837,13 @@ const [saving, setSaving] = useState(false);
                 placeholder="0"
                 className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
               />
+              {form.agentId && form.productId && (
+                <p className={`text-[11px] mt-1.5 ${availableForSelectedProduct <= 0 ? "text-danger" : "text-muted"}`}>
+                  {availableForSelectedProduct} box{availableForSelectedProduct === 1 ? "" : "es"} available
+                  {piecesPerBoxForSelected ? ` (≈ ${availableForSelectedProduct * piecesPerBoxForSelected} pcs)` : ""}
+                  {" · "}worth {fmt(availableForSelectedProduct * unitPrice)}
+                </p>
+              )}
             </div>
             <div>
               <label className="text-xs text-muted uppercase tracking-wide block mb-1.5">
@@ -735,33 +861,44 @@ const [saving, setSaving] = useState(false);
                 {fmt(totalPrice)}
               </div>
             </div>
-            <div className="sm:col-span-2">
-              <label className="text-xs text-muted uppercase tracking-wide block mb-2">
-                Payment Status
-              </label>
-              <div className="flex flex-col sm:flex-row gap-2 sm:gap-3">
-                {(["paid", "loan"] as const).map((s) => (
-                  <label
-                    key={s}
-                    className="flex items-center gap-2 cursor-pointer"
-                  >
-                    <input
-                      type="radio"
-                      name="status"
-                      value={s}
-                      checked={form.paymentStatus === s}
-                      onChange={setF("paymentStatus")}
-                      className="accent-primary"
-                    />
-                    <span
-                      className={`text-sm font-medium capitalize ${s === "paid" ? "text-success" : "text-secondary"}`}
-                    >
-                      {s === "paid" ? "✓ Paid" : "⏳ Loan (to be paid later)"}
-                    </span>
-                  </label>
-                ))}
+            {saleType === "client" && (
+              <div className="sm:col-span-2 text-xs text-secondary bg-secondary/10 border border-secondary/20 rounded-[var(--radius-sm)] px-3 py-2">
+                ⏳ Sales to existing clients are always recorded as a loan — record payments separately on the Payments page so each one is tracked clearly against its date.
               </div>
-            </div>
+            )}
+            {saleType === "walkin" && (
+              <div className="sm:col-span-2 space-y-3">
+                <div className="text-xs text-success bg-success/10 border border-success/20 rounded-[var(--radius-sm)] px-3 py-2">
+                  ✓ This sale is paid in full right now — pick how the money came in.
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {(["cash", "telephone"] as const).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setWalkinMode(m)}
+                      className={`py-2.5 text-sm font-medium rounded-[var(--radius)] border transition-colors ${
+                        walkinMode === m
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-border text-muted hover:border-primary/30"
+                      }`}
+                    >
+                      {m === "cash" ? "💵 Cash" : "📱 Mobile Money"}
+                    </button>
+                  ))}
+                </div>
+                {walkinMode === "telephone" && (
+                  <div>
+                    <label className="text-xs text-muted uppercase tracking-wide block mb-1.5">Receiver Name</label>
+                    <input
+                      value={walkinReceiver}
+                      onChange={(e) => setWalkinReceiver(e.target.value)}
+                      className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    />
+                  </div>
+                )}
+              </div>
+            )}
             <div className="sm:col-span-2 flex gap-3 pt-2">
               <button
                 onClick={closeModal}

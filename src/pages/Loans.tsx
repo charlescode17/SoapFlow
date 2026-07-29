@@ -32,8 +32,31 @@ export default function Loans({ setPage }: Props) {
       .filter((p) => p.reportId === reportId)
       .reduce((s, p) => s + p.amount, 0);
 
-  const getRemaining = (report: (typeof loanReports)[number]) =>
-    Math.max(0, report.totalPrice - getPaidForReport(report.id));
+  const getRemaining = (report: any) => {
+    const paid = getPaidForReport(report.id);
+    return Math.max(0, report.totalPrice - paid);
+  };
+
+  const getAgentDispatchedValue = (agentId: string) =>
+    state.stockMovements
+      .filter((m) => m.type === "marketing_agent" && m.agentId === agentId && !m.isReturn)
+      .reduce((s, m) => s + (m.totalPrice ?? 0), 0);
+
+  const getAgentReturnedValue = (agentId: string) =>
+    state.stockMovements
+      .filter((m) => m.type === "marketing_agent" && m.agentId === agentId && m.isReturn)
+      .reduce((s, m) => s + (m.totalPrice ?? 0), 0);
+
+  const getAgentStockLoan = (agentId: string) =>
+    Math.max(0, getAgentDispatchedValue(agentId) - getAgentReturnedValue(agentId));
+
+  const getAgentDistributedValue = (agentId: string) =>
+    state.agentReports
+      .filter((r) => !r.deleted && r.agentId === agentId)
+      .reduce((s, r) => s + r.totalPrice, 0);
+
+  const getAgentRemainingStock = (agentId: string) =>
+    Math.max(0, getAgentStockLoan(agentId) - getAgentDistributedValue(agentId));
 
   // If the logged-in user IS a marketing agent, skip the agent-picker level.
   const forcedAgentId = role === "marketing_agent" ? state.user?.id : null;
@@ -44,23 +67,34 @@ export default function Loans({ setPage }: Props) {
   );
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-
+  const [expandedCard, setExpandedCard] = useState<"dispatched" | "distributed" | "remaining" | null>(null);
   const getProductName = (id: string) =>
     state.products.find((p) => p.id === id)?.name ?? "—";
 
-  /* ---------- LEVEL 1: agent cards ---------- */
+  /* ---------- LEVEL 1: agent cards — stock debt, not client receivables ---------- */
+  const getAgentStockDebt = (agentId: string) => {
+    const dispatched = state.stockMovements
+      .filter((m) => m.type === "marketing_agent" && m.agentId === agentId && !m.isReturn)
+      .reduce((s, m) => s + (m.totalPrice ?? 0), 0);
+    const returned = state.stockMovements
+      .filter((m) => m.type === "marketing_agent" && m.agentId === agentId && m.isReturn)
+      .reduce((s, m) => s + (m.totalPrice ?? 0), 0);
+    const collected = state.payments
+      .filter((p) => p.agentId === agentId)
+      .reduce((s, p) => s + p.amount, 0);
+    return Math.max(0, dispatched - returned - collected);
+  };
+
   const agentSummaries = activeAgents
     .map((agent) => {
       const reports = loanReports.filter((r) => r.agentId === agent.id);
       const byClient = new Map<string, number>();
-      let total = 0;
       reports.forEach((r) => {
         const remaining = getRemaining(r);
         if (remaining <= 0) return;
-        total += remaining;
         byClient.set(r.clientId, (byClient.get(r.clientId) ?? 0) + remaining);
       });
-      return { agent, total, clientCount: byClient.size };
+      return { agent, total: getAgentStockDebt(agent.id), clientCount: byClient.size };
     })
     .filter((s) => s.total > 0)
     .sort((a, b) => b.total - a.total);
@@ -228,6 +262,142 @@ export default function Loans({ setPage }: Props) {
             ))}
           </div>
         )
+      )}
+
+      {/* ============ LEVEL 2: STOCK ACCOUNTABILITY + CLIENTS FOR AGENT ============ */}
+      {view === "clients" && selectedAgentId && (
+        <div className="mb-6">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
+            {[
+              {
+                key: "dispatched" as const,
+                label: "Stock Dispatched",
+                sub: "charged to this agent",
+                value: getAgentStockLoan(selectedAgentId),
+                color: "#D99A3D",
+                bg: "bg-secondary/10",
+                border: "border-secondary/20",
+                text: "text-secondary",
+              },
+              {
+                key: "distributed" as const,
+                label: "Sales Distributed",
+                sub: "given out to clients",
+                value: getAgentDistributedValue(selectedAgentId),
+                color: "#2E9E8F",
+                bg: "bg-primary/10",
+                border: "border-primary/20",
+                text: "text-primary",
+              },
+              {
+                key: "remaining" as const,
+                label: "Remaining in Hand",
+                sub: "not yet accounted for",
+                value: getAgentRemainingStock(selectedAgentId),
+                color: "#3FA66B",
+                bg: "bg-success/10",
+                border: "border-success/20",
+                text: "text-success",
+              },
+            ].map((card) => (
+              <button
+                key={card.key}
+                onClick={() => setExpandedCard(expandedCard === card.key ? null : card.key)}
+                className={`text-left ${card.bg} border ${card.border} rounded-[var(--radius-lg)] p-5 hover:shadow-md hover:-translate-y-0.5 transition-all duration-200`}
+              >
+                <div className="text-[11px] uppercase tracking-wide mb-1" style={{ color: card.color }}>
+                  {card.label}
+                </div>
+                <div className={`text-2xl font-mono ${card.text}`}>{fmt(card.value)}</div>
+                <div className="text-[11px] text-muted mt-1">{card.sub} · tap for detail</div>
+              </button>
+            ))}
+          </div>
+
+          {expandedCard === "dispatched" && (
+            <div className="bg-card border border-border rounded-[var(--radius-lg)] overflow-hidden mb-4">
+              <div className="px-5 py-3.5 border-b border-border bg-secondary/5 text-sm font-medium text-secondary">
+                Dispatch & Return Ledger
+              </div>
+              {(() => {
+                const moves = state.stockMovements
+                  .filter((m) => m.type === "marketing_agent" && m.agentId === selectedAgentId)
+                  .sort((a, b) => b.date.localeCompare(a.date));
+                if (moves.length === 0)
+                  return <div className="py-8 text-center text-sm text-muted">No dispatches recorded yet</div>;
+                return (
+                  <div className="divide-y divide-border/50">
+                    {moves.map((m) => (
+                      <div key={m.id} className="flex items-center justify-between gap-3 px-5 py-3">
+                        <div>
+                          <div className="text-sm text-foreground">
+                            {getProductName(m.productId)}
+                            {m.isReturn && (
+                              <span className="ml-2 text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800">Return</span>
+                            )}
+                          </div>
+                          <div className="text-xs text-muted">
+                            {fmtDate(m.date)} {m.location ? `· ${m.location}` : ""}
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-sm font-mono text-foreground">
+                            {m.isReturn ? m.stockIn : m.stockOut} boxes
+                          </div>
+                          <div className={`text-xs font-mono ${m.isReturn ? "text-success" : "text-secondary"}`}>
+                            {m.totalPrice != null ? fmt(m.totalPrice) : "—"}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
+          {expandedCard === "distributed" && (
+            <div className="bg-card border border-border rounded-[var(--radius-lg)] overflow-hidden mb-4">
+              <div className="px-5 py-3.5 border-b border-border bg-primary/5 text-sm font-medium text-primary">
+                Sales Distributed to Clients
+              </div>
+              {(() => {
+                const reports = state.agentReports
+                  .filter((r) => !r.deleted && r.agentId === selectedAgentId)
+                  .sort((a, b) => b.date.localeCompare(a.date));
+                if (reports.length === 0)
+                  return <div className="py-8 text-center text-sm text-muted">No sales reported yet</div>;
+                return (
+                  <div className="divide-y divide-border/50">
+                    {reports.map((r) => {
+                      const client = activeClients.find((c) => c.id === r.clientId);
+                      return (
+                        <div key={r.id} className="flex items-center justify-between gap-3 px-5 py-3">
+                          <div>
+                            <div className="text-sm text-foreground">
+                              {client?.name ?? r.customerName ?? "Walk-in customer"} — {getProductName(r.productId)}
+                            </div>
+                            <div className="text-xs text-muted">{fmtDate(r.date)} · {r.qty} boxes</div>
+                          </div>
+                          <div className="text-sm font-mono text-primary">{fmt(r.totalPrice)}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
+          {expandedCard === "remaining" && (
+            <div className="bg-card border border-border rounded-[var(--radius-lg)] p-5 mb-4 text-sm text-foreground">
+              <span className="font-mono">{fmt(getAgentStockLoan(selectedAgentId))}</span> dispatched −{" "}
+              <span className="font-mono">{fmt(getAgentDistributedValue(selectedAgentId))}</span> distributed ={" "}
+              <span className="font-mono font-semibold text-success">{fmt(getAgentRemainingStock(selectedAgentId))}</span> still physically with this agent.
+              <p className="text-xs text-muted mt-2">This should match what the agent is currently carrying — if it doesn't, follow up with them directly.</p>
+            </div>
+          )}
+        </div>
       )}
 
       {/* ============ LEVEL 2: CLIENTS FOR AGENT ============ */}

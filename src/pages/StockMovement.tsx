@@ -140,6 +140,15 @@ export default function StockMovement() {
 
         const prevBalance = lastBalance(state.stockMovements, item.productId);
 
+        const lineUnitPrice =
+          commonForm.type === "marketing_agent"
+            ? item.unit === "box"
+              ? prod?.boxPrice ?? prod?.pricePerBox ?? 0
+              : prod?.unitPrice ?? 0
+            : null;
+        const lineTotalPrice =
+          lineUnitPrice != null ? parseFloat((qty * lineUnitPrice).toFixed(2)) : null;
+
         let boxesQty = qty;
         let baseQty = qty;
 
@@ -181,6 +190,8 @@ export default function StockMovement() {
             stock_in: stockIn,
             stock_out: stockOut,
             balance: newBalance,
+            unit_price: lineUnitPrice,
+            total_price: lineTotalPrice,
             created_by: state.user?.name ?? "unknown",
           })
           .select("id")
@@ -210,6 +221,8 @@ export default function StockMovement() {
             stockIn,
             stockOut,
             balance: newBalance,
+            unitPrice: lineUnitPrice ?? undefined,
+            totalPrice: lineTotalPrice ?? undefined,
             createdBy: state.user?.name ?? "unknown",
           },
         });

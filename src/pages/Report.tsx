@@ -131,6 +131,9 @@ export default function Report() {
   const getName = (id: string, list: { id: string; name: string }[]) =>
     list.find((i) => i.id === id)?.name ?? "—";
 
+  const getBuyerLabel = (r: AgentReport) =>
+    r.clientId ? getName(r.clientId, clients) : r.customerName?.trim() || "Walk-in customer";
+
   const inDateRange = (date: string) =>
     inRange(date, dateFilter, customFrom, customTo);
   const getReportRemaining = (report: (typeof activeReports)[number]) => {
