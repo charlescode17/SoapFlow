@@ -36,10 +36,10 @@ const NAV: {
     icon: ArrowLeftRight,
     group: "Reports",
   },
-  { id: "reports", label: "Agent Reports", icon: FileText, group: "Reports" },
+  { id: "reports", label: "Sales Reports", icon: FileText, group: "Reports" },
   { id: "loans", label: "Loans", icon: CreditCard, group: "Reports" },
   { id: "payments", label: "Payments", icon: Banknote, group: "Reports" },
-  { id: "report", label: "Report", icon: BarChart3, group: "Reports" },
+  { id: "report", label: "My Reports", icon: BarChart3, group: "Reports" },
   { id: "settings", label: "Settings", icon: Settings, group: "System" },
 ];
 
@@ -47,7 +47,7 @@ const ALL_PAGES = NAV.map((n) => n.id);
 
 const ROLE_PAGES: Record<string, Page[]> = {
   manager: ALL_PAGES,
-  marketing_agent: ["dashboard", "clients", "reports", "loans", "payments", "settings"],
+  marketing_agent: ["dashboard", "clients", "reports", "loans", "payments", "report", "settings"],
   stock_agent: ["dashboard", "products", "stock", "report", "settings"],
   readonly: ALL_PAGES,
 };

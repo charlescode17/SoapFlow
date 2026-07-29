@@ -16,6 +16,7 @@ import type {
   AgentReport,
   Payment,
   Bank,
+  Expense,
   User,
 } from "./types";
 
@@ -34,7 +35,11 @@ type Action =
   | { type: "ADD_AGENT_REPORT"; payload: AgentReport }
   | { type: "UPDATE_AGENT_REPORT"; payload: AgentReport }
   | { type: "DELETE_AGENT_REPORT"; id: string }
+  | { type: "SET_AGENT_REPORTS"; payload: AgentReport[] }
   | { type: "ADD_PAYMENT"; payload: Payment }
+  | { type: "SET_PAYMENTS"; payload: Payment[] }
+  | { type: "ADD_EXPENSE"; payload: Expense }
+  | { type: "SET_EXPENSES"; payload: Expense[] }
   | { type: "ADD_BANK"; payload: Bank }
   | { type: "DELETE_BANK"; id: string }
   | { type: "SET_AGENTS"; payload: Agent[] }
@@ -127,8 +132,16 @@ function reducer(state: AppState, action: Action): AppState {
           r.id === action.id ? { ...r, deleted: true } : r,
         ),
       };
+    case "SET_AGENT_REPORTS":
+      return { ...state, agentReports: action.payload };
     case "ADD_PAYMENT":
       return { ...state, payments: [...state.payments, action.payload] };
+    case "SET_PAYMENTS":
+      return { ...state, payments: action.payload };
+    case "ADD_EXPENSE":
+      return { ...state, expenses: [...state.expenses, action.payload] };
+    case "SET_EXPENSES":
+      return { ...state, expenses: action.payload };
     case "ADD_BANK":
       return { ...state, banks: [...state.banks, action.payload] };
     case "DELETE_BANK":
@@ -187,8 +200,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return () => listener.subscription.unsubscribe();
   }, []);
 
-  // Enforce a 24h session limit ourselves, since Supabase's built-in
-  // session timeout setting requires the Pro plan.
   useEffect(() => {
     function checkExpiry() {
       const startedAt = localStorage.getItem("sf_session_started");
@@ -327,6 +338,86 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
     }
     if (state.user) loadStockMovements();
+  }, [state.user?.id]);
+
+  // NEW — agent reports
+  useEffect(() => {
+    async function loadAgentReports() {
+      const { data } = await supabase
+        .from("agent_reports")
+        .select("*")
+        .order("date", { ascending: false });
+      if (data) {
+        dispatch({
+          type: "SET_AGENT_REPORTS",
+          payload: data.map((r: any) => ({
+            id: r.id,
+            agentId: r.agent_id,
+            clientId: r.client_id,
+            productId: r.product_id,
+            date: r.date,
+            qty: Number(r.qty),
+            unitPrice: Number(r.unit_price),
+            totalPrice: Number(r.total_price),
+            paymentStatus: r.payment_status,
+            createdBy: r.created_by,
+            deleted: Boolean(r.deleted),
+          })),
+        });
+      }
+    }
+    if (state.user) loadAgentReports();
+  }, [state.user?.id]);
+
+  // NEW — payments
+  useEffect(() => {
+    async function loadPayments() {
+      const { data } = await supabase
+        .from("payments")
+        .select("*")
+        .order("date", { ascending: false });
+      if (data) {
+        dispatch({
+          type: "SET_PAYMENTS",
+          payload: data.map((p: any) => ({
+            id: p.id,
+            clientId: p.client_id,
+            agentId: p.agent_id ?? undefined,
+            reportId: p.report_id ?? undefined,
+            date: p.date,
+            amount: Number(p.amount),
+            mode: p.mode,
+            bankId: p.bank_id ?? undefined,
+            receiverName: p.receiver_name ?? undefined,
+          })),
+        });
+      }
+    }
+    if (state.user) loadPayments();
+  }, [state.user?.id]);
+
+  // NEW — expenses (depense)
+  useEffect(() => {
+    async function loadExpenses() {
+      const { data } = await supabase
+        .from("expenses")
+        .select("*")
+        .order("date", { ascending: false });
+      if (data) {
+        dispatch({
+          type: "SET_EXPENSES",
+          payload: data.map((e: any) => ({
+            id: e.id,
+            agentId: e.agent_id,
+            date: e.date,
+            name: e.name,
+            amount: Number(e.amount),
+            createdBy: e.created_by,
+          })),
+        });
+      }
+    }
+    if (state.user) loadExpenses();
   }, [state.user?.id]);
 
   return (

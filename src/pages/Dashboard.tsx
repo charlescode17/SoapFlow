@@ -8,6 +8,19 @@ import { useTypewriter } from '../lib/useTypewriter'
 import { fmt, fmtDate } from '../lib/utils'
 import { normalizeRole, type Page } from '../lib/types'
 
+function getLastMonths(n: number) {
+  const out: { key: string; label: string }[] = []
+  const now = new Date()
+  for (let i = n - 1; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
+    out.push({
+      key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
+      label: d.toLocaleDateString('en-GB', { month: 'short' }),
+    })
+  }
+  return out
+}
+
 interface Props { setPage: (p: Page) => void }
 
 function currentStock(movements: ReturnType<typeof useStore>['state']['stockMovements'], productId: string) {
@@ -376,12 +389,15 @@ export default function Dashboard({ setPage }: Props) {
       .sort((a, b) => b.loan - a.loan)
 
     // Chart Data: Loan vs Revenue monthly comparison
-    const months = ['Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul']
-    const agentMonthlyData = months.map((m, i) => ({
-      month: m,
-      Revenue: [150000, 280000, 210000, 310000, 420000, myPaidRevenue][i],
-      Loans: [45000, 110000, 85000, 190000, 280000, totalLoansAmount][i],
-    }))
+ // NEW — real data per month
+const agentMonthlyData = getLastMonths(6).map(({ key, label }) => {
+  const monthReports = myReports.filter(r => r.date.startsWith(key))
+  return {
+    month: label,
+    Revenue: monthReports.filter(r => r.paymentStatus === 'paid').reduce((s, r) => s + r.totalPrice, 0),
+    Loans: monthReports.filter(r => r.paymentStatus === 'loan').reduce((s, r) => s + r.totalPrice, 0),
+  }
+})
 
     const maKpis = [
       { label: 'Clients Handled', value: handlesCount.toString(), sub: 'total assigned clients', color: '#2E9E8F', icon: Users },
@@ -510,7 +526,7 @@ export default function Dashboard({ setPage }: Props) {
                         <td className="px-3 py-3 text-xs font-mono text-muted">
                           {client.phone || '—'}
                         </td>
-                        <td className="px-3 py-3 text-xs font-mono font-bold text-right text-foreground">
+                        <td className="px-3 py-3 text-xs font-mono text-right text-foreground">
                           {loan > 0 ? `${loan.toLocaleString()} RWF` : '0 RWF'}
                         </td>
                         <td className="px-3 py-3 text-center">
@@ -519,7 +535,7 @@ export default function Dashboard({ setPage }: Props) {
                             risk === 'Moderate' ? 'bg-amber-100 text-amber-700' :
                             'bg-emerald-100 text-emerald-700'
                           }`}>
-                            {risk === 'High' ? '⚠️ High Risk' : risk === 'Moderate' ? '⏳ Loan Active' : '✅ Clear'}
+                            {risk === 'High' ? 'High Risk' : risk === 'Moderate' ? 'Loan Active' : 'Clear'}
                           </span>
                         </td>
                       </tr>
@@ -553,12 +569,15 @@ export default function Dashboard({ setPage }: Props) {
     'Stock Out': m.stockOut,
   }))
 
-  const months = ['Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul']
-  const monthlyData = months.map((m, i) => ({
-    month: m,
-    Revenue: [210000, 385000, 297500, 440000, 522500, totalRevenue][i],
-    Loans: [82500, 165000, 110000, 247500, 357500, outstandingLoans][i],
-  }))
+  // NEW — real data per month
+const monthlyData = getLastMonths(6).map(({ key, label }) => {
+  const monthReports = activeReports.filter(r => r.date.startsWith(key))
+  return {
+    month: label,
+    Revenue: monthReports.filter(r => r.paymentStatus === 'paid').reduce((s, r) => s + r.totalPrice, 0),
+    Loans: monthReports.filter(r => r.paymentStatus === 'loan').reduce((s, r) => s + r.totalPrice, 0),
+  }
+})
 
   const modeCounts = payments.reduce((acc, p) => {
     acc[p.mode] = (acc[p.mode] || 0) + p.amount

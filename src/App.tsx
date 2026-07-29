@@ -29,7 +29,7 @@ const ROLE_ALLOWED_PAGES: Record<string, Page[]> = {
     "report",
     "settings",
   ],
-  marketing_agent: ["dashboard", "clients", "reports", "loans", "payments", "settings"],
+  marketing_agent: ["dashboard", "clients", "reports", "loans", "payments", "report", "settings"],
   stock_agent: ["dashboard", "products", "stock", "report", "settings"],
 };
 

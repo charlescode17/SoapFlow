@@ -9,11 +9,13 @@ import {
   LayoutGrid,
 } from "lucide-react";
 import { useStore } from "../lib/store";
+import { supabase } from "../lib/supabase";
 import { Modal } from "../components/Modal";
 import { Confirm } from "../components/Confirm";
-import { fmt, fmtDate, uid, today } from "../lib/utils";
+import { fmt, fmtDate, today } from "../lib/utils";
 import type { AgentReport, PaymentStatus } from "../lib/types";
 import { normalizeRole } from "../lib/types";
+import Swal from "sweetalert2";
 
 type DateFilter = "all" | "daily" | "weekly" | "monthly" | "annual";
 type ViewMode = "list" | "grid";
@@ -120,24 +122,100 @@ export default function AgentReports() {
     setEditing(null);
   };
 
-  const handleSave = () => {
-    if (!form.agentId || !form.clientId || !form.qty) return;
-    const payload: AgentReport = {
-      id: editing?.id ?? uid(),
-      agentId: form.agentId,
-      clientId: form.clientId,
-      productId: form.productId,
+const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    if (!form.agentId || !form.clientId || !form.qty || !state.user) return;
+    setSaving(true);
+
+    const payload = {
+      agent_id: form.agentId,
+      client_id: form.clientId,
+      product_id: form.productId,
       date: form.date,
-      qty: parseInt(form.qty),
-      unitPrice,
-      totalPrice,
-      paymentStatus: form.paymentStatus,
-      createdBy: state.user?.name ?? "manager",
-      deleted: false,
+      qty: parseFloat(form.qty),
+      unit_price: unitPrice,
+      total_price: totalPrice,
+      payment_status: form.paymentStatus,
+      created_by: state.user.name,
     };
-    if (modal === "add") dispatch({ type: "ADD_AGENT_REPORT", payload });
-    else dispatch({ type: "UPDATE_AGENT_REPORT", payload });
+
+    if (modal === "add") {
+      const { data, error } = await supabase
+        .from("agent_reports")
+        .insert(payload)
+        .select()
+        .single();
+
+      setSaving(false);
+      if (error) {
+        Swal.fire({ icon: "error", title: "Could not save report", text: error.message, confirmButtonColor: "#2E9E8F" });
+        return;
+      }
+
+      const newReport: AgentReport = {
+        id: data.id,
+        agentId: data.agent_id,
+        clientId: data.client_id,
+        productId: data.product_id,
+        date: data.date,
+        qty: Number(data.qty),
+        unitPrice: Number(data.unit_price),
+        totalPrice: Number(data.total_price),
+        paymentStatus: data.payment_status,
+        createdBy: data.created_by,
+        deleted: false,
+      };
+      dispatch({ type: "ADD_AGENT_REPORT", payload: newReport });
+
+      await supabase.from("activity_logs").insert({
+        actor_id: state.user.id,
+        actor_name: state.user.name,
+        action: "created",
+        entity_type: "agent_report",
+        entity_id: data.id,
+        entity_name: `${getName(form.clientId, clients)} — ${getName(form.productId, products)}`,
+      });
+    } else if (editing) {
+      const { error } = await supabase
+        .from("agent_reports")
+        .update(payload)
+        .eq("id", editing.id);
+
+      setSaving(false);
+      if (error) {
+        Swal.fire({ icon: "error", title: "Could not update report", text: error.message, confirmButtonColor: "#2E9E8F" });
+        return;
+      }
+
+      dispatch({
+        type: "UPDATE_AGENT_REPORT",
+        payload: {
+          ...editing,
+          agentId: form.agentId,
+          clientId: form.clientId,
+          productId: form.productId,
+          date: form.date,
+          qty: parseInt(form.qty),
+          unitPrice,
+          totalPrice,
+          paymentStatus: form.paymentStatus,
+        },
+      });
+    }
     closeModal();
+  };
+
+  const handleDelete = async (id: string) => {
+    const { error } = await supabase
+      .from("agent_reports")
+      .update({ deleted: true })
+      .eq("id", id);
+    if (error) {
+      Swal.fire({ icon: "error", title: "Could not delete report", text: error.message, confirmButtonColor: "#2E9E8F" });
+      return;
+    }
+    dispatch({ type: "DELETE_AGENT_REPORT", id });
   };
 
   const setF =

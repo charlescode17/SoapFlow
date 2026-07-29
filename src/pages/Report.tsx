@@ -34,6 +34,7 @@ import { useStore } from "../lib/store";
 import { fmt, fmtDate, today } from "../lib/utils";
 import { normalizeRole, type PaymentMode } from "../lib/types";
 
+
 // ============================================================================
 // 🏢 COMPANY NAME (Edit this text anytime to change the company name on PDF & Excel reports)
 // ============================================================================
@@ -68,6 +69,15 @@ function inRange(
   return true;
 }
 
+const movementLabel = (type: string) =>
+  type === "production"
+    ? "Production Stock"
+    : type === "marketing_agent"
+      ? "Agent Dispatch"
+      : type === "customer_sale"
+        ? "Customer Direct Sale"
+        : "Other Adjustment";
+
 const PIE_COLORS = ["#2E9E8F", "#D99A3D", "#3FA66B"];
 
 const REPORT_TYPES: {
@@ -89,6 +99,7 @@ const dateLabel: Record<DateFilter, string> = {
   custom: "Custom Range",
 };
 
+
 export default function Report() {
   const { state } = useStore();
   const agents = state.agents.filter((a) => !a.deleted);
@@ -108,6 +119,7 @@ export default function Report() {
   const [modeFilter, setModeFilter] = useState<"all" | PaymentMode>("all");
 
   const [hiddenSections, setHiddenSections] = useState<Record<string, boolean>>({});
+  const [maSection, setMaSection] = useState<"sales" | "clients" | "payments">("sales");
 
   const toggleSection = (key: string) => {
     setHiddenSections((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -121,6 +133,12 @@ export default function Report() {
 
   const inDateRange = (date: string) =>
     inRange(date, dateFilter, customFrom, customTo);
+  const getReportRemaining = (report: (typeof activeReports)[number]) => {
+    const paid = state.payments
+      .filter((p) => p.reportId === report.id)
+      .reduce((s, p) => s + p.amount, 0);
+    return Math.max(0, report.totalPrice - paid);
+  };
 
   /* ---------------- SALES ---------------- */
   const salesFiltered = useMemo(() => {
@@ -154,8 +172,9 @@ export default function Report() {
   const salesLoan = salesFiltered
     .filter((r) => r.paymentStatus === "loan")
     .reduce((s, r) => s + r.totalPrice, 0);
-  const salesPaidTotal = salesPayments.reduce((s, p) => s + p.amount, 0);
-  const salesOutstanding = Math.max(0, salesLoan - salesPaidTotal);
+  const salesOutstanding = salesFiltered
+    .filter((r) => r.paymentStatus === "loan")
+    .reduce((s, r) => s + getReportRemaining(r), 0);
 
   const salesByProduct = products
     .map((p) => {
@@ -259,12 +278,9 @@ export default function Report() {
       const allLoanReports = activeReports.filter(
         (r) => r.clientId === c.id && r.paymentStatus === "loan",
       );
-      const allPaid = state.payments
-        .filter((p) => p.clientId === c.id)
-        .reduce((s, p) => s + p.amount, 0);
-      const outstanding = Math.max(
+      const outstanding = allLoanReports.reduce(
+        (s, r) => s + getReportRemaining(r),
         0,
-        allLoanReports.reduce((s, r) => s + r.totalPrice, 0) - allPaid,
       );
       return { client: c, issued, qty, paidInRange, outstanding };
     })
@@ -783,7 +799,333 @@ export default function Report() {
       </div>
     );
   }
-  /* ============================================================ */
+  if (userRole === "marketing_agent") {
+    const myAgentId = state.user?.id;
+    const firstName = (state.user?.name || "").trim().split(" ")[0] || "there";
+
+    const myReports = activeReports.filter((r) => r.agentId === myAgentId);
+    const myClientsList = clients.filter(
+      (c) => c.agentId === myAgentId || c.handlerId === myAgentId,
+    );
+    const myPayments = state.payments.filter((p) => p.agentId === myAgentId);
+    const myExpenses = state.expenses.filter((e) => e.agentId === myAgentId);
+
+    const getProductName = (id: string) =>
+      products.find((p) => p.id === id)?.name ?? "—";
+    const getBankName = (id?: string) =>
+      id ? state.banks.find((b) => b.id === id)?.name ?? "—" : "—";
+
+    const salesInRange = myReports
+      .filter((r) => inDateRange(r.date))
+      .sort((a, b) => b.date.localeCompare(a.date));
+    const salesTotal = salesInRange.reduce((s, r) => s + r.totalPrice, 0);
+    const salesQtyTotal = salesInRange.reduce((s, r) => s + r.qty, 0);
+    const salesOutstandingTotal = salesInRange
+      .filter((r) => r.paymentStatus === "loan")
+      .reduce((s, r) => s + getReportRemaining(r), 0);
+
+    const myClientsWithLoans = myClientsList.map((c) => {
+      const clientLoanReports = myReports.filter(
+        (r) => r.clientId === c.id && r.paymentStatus === "loan",
+      );
+      const outstanding = clientLoanReports.reduce(
+        (s, r) => s + getReportRemaining(r),
+        0,
+      );
+      return { client: c, outstanding };
+    });
+    const myClientsOutstandingTotal = myClientsWithLoans.reduce(
+      (s, c) => s + c.outstanding,
+      0,
+    );
+
+    const payInRange = myPayments.filter((p) => inDateRange(p.date));
+    const expInRange = myExpenses.filter((e) => inDateRange(e.date));
+    const payDayKeys = Array.from(
+      new Set([...payInRange.map((p) => p.date), ...expInRange.map((e) => e.date)]),
+    ).sort((a, b) => b.localeCompare(a));
+    const payTotals = {
+      cash: payInRange.filter((p) => p.mode === "cash").reduce((s, p) => s + p.amount, 0),
+      bank: payInRange.filter((p) => p.mode === "bank").reduce((s, p) => s + p.amount, 0),
+      telephone: payInRange.filter((p) => p.mode === "telephone").reduce((s, p) => s + p.amount, 0),
+      expense: expInRange.reduce((s, e) => s + e.amount, 0),
+    };
+
+    const MA_SECTIONS: { id: typeof maSection; label: string; icon: React.ElementType }[] = [
+      { id: "sales", label: "My Sales & Loans", icon: FileText },
+      { id: "clients", label: "My Clients", icon: Users },
+      { id: "payments", label: "My Payments", icon: Banknote },
+    ];
+
+    return (
+      <div className="p-4 sm:p-6 lg:p-8 max-w-7xl">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 no-print">
+          <div>
+            <h1 className="text-xl sm:text-2xl font-bold text-foreground">
+              Hey {firstName}, here's your report 👋
+            </h1>
+            <p className="text-sm text-muted mt-1">
+              {dateLabel[dateFilter]} · everything you can print for your own records
+            </p>
+          </div>
+          <button
+            onClick={() => window.print()}
+            className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-primary text-white rounded-[var(--radius)] hover:bg-primary/90 transition-colors shadow-sm self-start sm:self-auto"
+          >
+            <Printer size={15} />
+            <span>Print / PDF</span>
+          </button>
+        </div>
+
+        <div className="no-print mb-6 space-y-3">
+          <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
+            {MA_SECTIONS.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => setMaSection(s.id)}
+                className={`flex items-center gap-2 px-4 py-2.5 text-sm font-semibold rounded-[var(--radius)] transition-colors whitespace-nowrap flex-shrink-0 ${
+                  maSection === s.id
+                    ? "bg-primary text-white"
+                    : "bg-card border border-border text-muted hover:text-foreground"
+                }`}
+              >
+                <s.icon size={15} />
+                {s.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
+            {(["daily", "weekly", "monthly", "annual"] as const).map((f) => (
+              <button
+                key={f}
+                onClick={() => setDateFilter(f)}
+                className={`px-4 py-2 text-sm font-medium rounded-[var(--radius)] transition-colors whitespace-nowrap flex-shrink-0 ${
+                  dateFilter === f
+                    ? "bg-primary/10 text-primary border border-primary/30"
+                    : "bg-card border border-border text-muted hover:text-foreground"
+                }`}
+              >
+                {dateLabel[f]}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="hidden print:block mb-6 border-b border-border pb-4">
+          <div className="text-xl font-bold text-foreground uppercase tracking-wide">SoapFlow</div>
+          <div className="text-base font-semibold text-primary mt-0.5">
+            {maSection === "sales" ? "AGENT SALES & LOAN REPORT" : maSection === "clients" ? "MY CLIENTS REPORT" : "AGENT PAYMENTS REPORT"}
+          </div>
+          <div className="text-xs text-muted mt-1">
+            {state.user?.name} · {dateLabel[dateFilter]} · Generated: {new Date().toLocaleString()}
+          </div>
+        </div>
+
+        {maSection === "sales" && (
+          <>
+            <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 mb-6 no-print">
+              <div className="bg-card border border-border rounded-[var(--radius-lg)] p-4 sm:p-5">
+                <div className="text-xs text-muted mb-1.5">Total Sales</div>
+                <div className="text-lg font-mono text-foreground">{fmt(salesTotal)}</div>
+              </div>
+              <div className="bg-card border border-border rounded-[var(--radius-lg)] p-4 sm:p-5">
+                <div className="text-xs text-muted mb-1.5">Boxes Sold</div>
+                <div className="text-lg font-mono text-foreground">{salesQtyTotal.toLocaleString()}</div>
+              </div>
+              <div className="bg-secondary/10 border border-secondary/20 rounded-[var(--radius-lg)] p-4 sm:p-5 col-span-2 lg:col-span-1">
+                <div className="text-xs text-secondary mb-1.5">Outstanding</div>
+                <div className="text-lg font-mono text-secondary">{fmt(salesOutstandingTotal)}</div>
+              </div>
+            </div>
+
+            <div className="bg-card border border-border rounded-[var(--radius-lg)] overflow-hidden">
+              <div className="px-5 py-4 border-b border-border no-print">
+                <h3 className="text-sm font-semibold text-foreground">
+                  Sales Detail ({salesInRange.length} records)
+                </h3>
+              </div>
+              {salesInRange.length === 0 ? (
+                <div className="py-16 text-center text-sm text-muted">No sales recorded for this period</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-border bg-background/50">
+                        {["Date", "Client", "Telephone", "District", "Product", "Qty", "Total", "Status", "Remaining"].map((h) => (
+                          <th key={h} className="text-left text-[10px] text-muted uppercase tracking-wide px-3 py-2.5 whitespace-nowrap">
+                            {h}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {salesInRange.map((r) => {
+                        const client = clients.find((c) => c.id === r.clientId);
+                        const remaining = r.paymentStatus === "loan" ? getReportRemaining(r) : 0;
+                        return (
+                          <tr key={r.id} className="border-b border-border/50">
+                            <td className="px-3 py-2.5 text-xs font-mono text-foreground whitespace-nowrap">{fmtDate(r.date)}</td>
+                            <td className="px-3 py-2.5 text-xs text-foreground whitespace-nowrap">{client?.name ?? "—"}</td>
+                            <td className="px-3 py-2.5 text-xs text-muted whitespace-nowrap">{client?.phone ?? "—"}</td>
+                            <td className="px-3 py-2.5 text-xs text-muted whitespace-nowrap">{client?.district ?? "—"}</td>
+                            <td className="px-3 py-2.5 text-xs text-foreground whitespace-nowrap">{getProductName(r.productId)}</td>
+                            <td className="px-3 py-2.5 text-xs font-mono text-muted">{r.qty}</td>
+                            <td className="px-3 py-2.5 text-xs font-mono text-foreground">{fmt(r.totalPrice)}</td>
+                            <td className="px-3 py-2.5">
+                              <span className={`inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded-full ${r.paymentStatus === "paid" ? "bg-success/10 text-success" : "bg-secondary/10 text-secondary"}`}>
+                                {r.paymentStatus === "paid" ? "Paid" : "Loan"}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2.5 text-xs font-mono text-secondary">{remaining > 0 ? fmt(remaining) : "—"}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+
+        {maSection === "clients" && (
+          <div className="bg-card border border-border rounded-[var(--radius-lg)] overflow-hidden">
+            <div className="px-5 py-4 border-b border-border flex items-center justify-between no-print">
+              <h3 className="text-sm font-semibold text-foreground">
+                {myClientsList.length} client{myClientsList.length !== 1 ? "s" : ""} handled
+              </h3>
+              <span className="text-sm font-mono text-secondary">{fmt(myClientsOutstandingTotal)} total outstanding</span>
+            </div>
+            {myClientsWithLoans.length === 0 ? (
+              <div className="py-16 text-center text-sm text-muted">No clients assigned yet</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b border-border bg-background/50">
+                      {["Client", "Telephone", "District", "Sector", "Center", "Outstanding"].map((h) => (
+                        <th key={h} className="text-left text-[10px] text-muted uppercase tracking-wide px-3 py-2.5 whitespace-nowrap">
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {myClientsWithLoans
+                      .sort((a, b) => b.outstanding - a.outstanding)
+                      .map(({ client, outstanding }) => (
+                        <tr key={client.id} className="border-b border-border/50">
+                          <td className="px-3 py-2.5 text-xs font-medium text-foreground whitespace-nowrap">{client.name}</td>
+                          <td className="px-3 py-2.5 text-xs text-muted whitespace-nowrap">{client.phone}</td>
+                          <td className="px-3 py-2.5 text-xs text-muted whitespace-nowrap">{client.district}</td>
+                          <td className="px-3 py-2.5 text-xs text-muted whitespace-nowrap">{client.sector}</td>
+                          <td className="px-3 py-2.5 text-xs text-muted whitespace-nowrap">{client.center}</td>
+                          <td className="px-3 py-2.5 text-xs font-mono text-secondary">
+                            {outstanding > 0 ? fmt(outstanding) : <span className="text-success">Settled</span>}
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {maSection === "payments" && (
+          <>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6 no-print">
+              {[
+                { label: "Cash", value: payTotals.cash },
+                { label: "Bank", value: payTotals.bank },
+                { label: "Mobile Money", value: payTotals.telephone },
+                { label: "Depense", value: payTotals.expense },
+              ].map((t) => (
+                <div key={t.label} className="bg-card border border-border rounded-[var(--radius-lg)] p-4">
+                  <div className="text-xs text-muted mb-1.5">{t.label}</div>
+                  <div className="text-base font-mono text-foreground">{fmt(t.value)}</div>
+                </div>
+              ))}
+            </div>
+
+            <div className="bg-card border border-border rounded-[var(--radius-lg)] overflow-hidden">
+              {payDayKeys.length === 0 ? (
+                <div className="py-16 text-center text-sm text-muted">No payments or expenses for this period</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[780px]">
+                    <thead>
+                      <tr className="border-b border-border bg-background/50">
+                        {["Client / Expense", "Cash", "Bank", "Bank Name", "Mobile", "Receiver", "Depense", "Amount"].map((h) => (
+                          <th key={h} className="text-left text-[10px] text-muted uppercase tracking-wide px-3 py-2.5 whitespace-nowrap">
+                            {h}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {payDayKeys.map((date) => {
+                        const dayPayments = payInRange.filter((p) => p.date === date);
+                        const dayExpenses = expInRange.filter((e) => e.date === date);
+                        const dayCash = dayPayments.filter((p) => p.mode === "cash").reduce((s, p) => s + p.amount, 0);
+                        const dayBank = dayPayments.filter((p) => p.mode === "bank").reduce((s, p) => s + p.amount, 0);
+                        const dayTel = dayPayments.filter((p) => p.mode === "telephone").reduce((s, p) => s + p.amount, 0);
+                        const dayExp = dayExpenses.reduce((s, e) => s + e.amount, 0);
+                        return (
+                          <FragmentDay key={date}>
+                            <tr className="bg-accent/30">
+                              <td colSpan={8} className="px-3 py-1.5 text-xs font-semibold text-foreground">{fmtDate(date)}</td>
+                            </tr>
+                            {dayPayments.map((p) => {
+                              const client = clients.find((c) => c.id === p.clientId);
+                              return (
+                                <tr key={p.id} className="border-b border-border/40">
+                                  <td className="px-3 py-2 text-xs text-foreground whitespace-nowrap">{client?.name ?? "—"}</td>
+                                  <td className="px-3 py-2 text-xs font-mono text-success">{p.mode === "cash" ? fmt(p.amount) : "—"}</td>
+                                  <td className="px-3 py-2 text-xs font-mono text-primary">{p.mode === "bank" ? fmt(p.amount) : "—"}</td>
+                                  <td className="px-3 py-2 text-xs text-muted">{p.mode === "bank" ? getBankName(p.bankId) : "—"}</td>
+                                  <td className="px-3 py-2 text-xs font-mono text-secondary">{p.mode === "telephone" ? fmt(p.amount) : "—"}</td>
+                                  <td className="px-3 py-2 text-xs text-muted">{p.mode === "telephone" ? (p.receiverName || "—") : "—"}</td>
+                                  <td className="px-3 py-2 text-xs text-muted">—</td>
+                                  <td className="px-3 py-2 text-xs text-muted">—</td>
+                                </tr>
+                              );
+                            })}
+                            {dayExpenses.map((e) => (
+                              <tr key={e.id} className="border-b border-border/40">
+                                <td className="px-3 py-2 text-xs text-muted italic">(expense)</td>
+                                <td className="px-3 py-2 text-xs text-muted">—</td>
+                                <td className="px-3 py-2 text-xs text-muted">—</td>
+                                <td className="px-3 py-2 text-xs text-muted">—</td>
+                                <td className="px-3 py-2 text-xs text-muted">—</td>
+                                <td className="px-3 py-2 text-xs text-muted">—</td>
+                                <td className="px-3 py-2 text-xs text-foreground">{e.name}</td>
+                                <td className="px-3 py-2 text-xs font-mono text-danger">{fmt(e.amount)}</td>
+                              </tr>
+                            ))}
+                            <tr className="border-b-2 border-border bg-accent/50 font-semibold">
+                              <td className="px-3 py-2 text-xs text-foreground">Subtotal — {fmtDate(date)}</td>
+                              <td className="px-3 py-2 text-xs font-mono text-success">{fmt(dayCash)}</td>
+                              <td className="px-3 py-2 text-xs font-mono text-primary">{fmt(dayBank)}</td>
+                              <td className="px-3 py-2"></td>
+                              <td className="px-3 py-2 text-xs font-mono text-secondary">{fmt(dayTel)}</td>
+                              <td className="px-3 py-2"></td>
+                              <td className="px-3 py-2"></td>
+                              <td className="px-3 py-2 text-xs font-mono text-danger">{fmt(dayExp)}</td>
+                            </tr>
+                          </FragmentDay>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-7xl">
@@ -1814,7 +2156,9 @@ export default function Report() {
 }
 
 /* ---------------- Shared subcomponents ---------------- */
-
+function FragmentDay({ children }: { children: React.ReactNode }) {
+  return <>{children}</>;
+}
 function EmptyState() {
   return (
     <div className="bg-card border border-border rounded-[var(--radius-lg)] flex flex-col items-center justify-center py-16">

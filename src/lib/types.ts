@@ -100,6 +100,8 @@ export interface AgentReport {
 export interface Payment {
   id: string;
   clientId: string;
+  agentId?: string;      // NEW — who recorded it
+  reportId?: string;     // NEW — which agent_report (loan) this pays down
   date: string;
   amount: number;
   mode: PaymentMode;
@@ -112,6 +114,16 @@ export interface Bank {
   name: string;
 }
 
+// NEW
+export interface Expense {
+  id: string;
+  agentId: string;
+  date: string;
+  name: string;
+  amount: number;
+  createdBy: string;
+}
+
 export interface AppState {
   user: User | null;
   agents: Agent[];
@@ -121,4 +133,5 @@ export interface AppState {
   agentReports: AgentReport[];
   payments: Payment[];
   banks: Bank[];
+  expenses: Expense[]; // NEW
 }
