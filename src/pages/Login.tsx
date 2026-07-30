@@ -100,7 +100,7 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess?: () => void 
             <div className="w-10 h-10 rounded-[var(--radius)] bg-primary flex items-center justify-center">
               <Droplets size={20} className="text-white" />
             </div>
-            <span className="text-white font-bold text-lg">SoapFlow</span>
+            <span className="text-white font-bold text-lg">Kangaroo Bigger</span>
           </div>
           <div>
             <h1 className="text-4xl font-bold text-white leading-tight mb-4 min-h-[9rem]">

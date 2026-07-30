@@ -185,7 +185,7 @@ const [saving, setSaving] = useState(false);
       Swal.fire({
         icon: "warning",
         title: "Not enough stock on hand",
-        text: `This agent has only ${available} box${available === 1 ? "" : "es"} of ${selectedProduct?.name ?? "this product"} available to distribute (dispatched minus returns and already-reported sales). You entered ${requestedQty}.`,
+        text: `Dear agent you only have ${available} box${available === 1 ? "" : "es"} of ${selectedProduct?.name ?? "this product"}. You entered ${requestedQty}.`,
         confirmButtonColor: "#2E9E8F",
       });
       return;

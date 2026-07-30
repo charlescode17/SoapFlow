@@ -1,4 +1,20 @@
 import { useState, useMemo } from "react";
+import jsPDF from "jspdf";
+import "jspdf-autotable";
+import ExcelJS from "exceljs";
+
+/**
+ * jspdf-autotable's default export is unreliable under Vite/Rollup's
+ * ESM<->CJS interop (it can resolve to the module namespace object
+ * instead of the callable function, throwing "autoTable is not a
+ * function"). Importing it as a side-effect above reliably patches
+ * jsPDF.API.autoTable onto every jsPDF instance instead, so we call
+ * it as a method on the doc object everywhere in this file.
+ */
+type JsPdfWithAutoTable = jsPDF & {
+  autoTable: (options: Record<string, any>) => void;
+  lastAutoTable: { finalY: number };
+};
 import {
   BarChart3,
   Download,
@@ -14,6 +30,7 @@ import {
   Minus,
   Eye,
   RotateCcw,
+  FileSpreadsheet,
 } from "lucide-react";
 import {
   AreaChart,
@@ -34,14 +51,378 @@ import { useStore } from "../lib/store";
 import { fmt, fmtDate, today } from "../lib/utils";
 import { normalizeRole, type PaymentMode } from "../lib/types";
 
-
 // ============================================================================
-// 🏢 COMPANY NAME (Edit this text anytime to change the company name on PDF & Excel reports)
+// 🏢 COMPANY NAME — Edit the text below to change the company name on PDF & Excel reports
+// Just replace "SOAPFLOW" with your company name and it will appear on all printed reports
 // ============================================================================
-const COMPANY_NAME = "";
+const COMPANY_NAME = "SOAPFLOW";
 
 type DateFilter = "daily" | "weekly" | "monthly" | "annual" | "custom";
 type ReportType = "sales" | "stock" | "loans" | "payments";
+
+/* ============================================================================
+   PROFESSIONAL EXPORT ENGINE
+   ----------------------------------------------------------------------------
+   Everything below builds clean, business-only documents:
+     - PDF via jsPDF + jspdf-autotable (tables only, no screenshots/charts)
+     - Excel via ExcelJS (styled headers, borders, alternating rows)
+     - CSV (plain, structured, spreadsheet-safe)
+
+   Dependencies required in package.json:
+     jspdf, jspdf-autotable, exceljs
+============================================================================ */
+
+interface ReportMeta {
+  title: string;
+  period: string;
+  scope?: string;
+  generatedBy: string;
+}
+
+interface ReportSection {
+  heading: string;
+  headers: string[];
+  rows: (string | number)[][];
+  /** optional column alignment map for PDF (autotable columnStyles) */
+  numericColumns?: number[];
+}
+
+const PDF_COLORS = {
+  primary: [46, 158, 143] as [number, number, number],
+  text: [27, 35, 33] as [number, number, number],
+  muted: [107, 123, 120] as [number, number, number],
+  border: [224, 230, 228] as [number, number, number],
+  altRow: [246, 248, 247] as [number, number, number],
+};
+
+function pdfColumnStyles(headers: string[], numericColumns: number[] = []) {
+  const styles: Record<number, any> = {};
+  numericColumns.forEach((idx) => {
+    styles[idx] = { halign: "right" };
+  });
+  return styles;
+}
+
+function addPdfFootersAndPageNumbers(doc: jsPDF) {
+  const pageCount = doc.getNumberOfPages();
+  for (let i = 1; i <= pageCount; i++) {
+    doc.setPage(i);
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    doc.setDrawColor(...PDF_COLORS.border);
+    doc.setLineWidth(0.5);
+    doc.line(40, pageHeight - 42, pageWidth - 40, pageHeight - 42);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    doc.setTextColor(...PDF_COLORS.muted);
+    doc.text(`${COMPANY_NAME} — Confidential Business Report`, 40, pageHeight - 28);
+    doc.text(`Page ${i} of ${pageCount}`, pageWidth - 40, pageHeight - 28, {
+      align: "right",
+    });
+  }
+}
+
+function buildPdfReport(
+  meta: ReportMeta,
+  summary: string[],
+  sections: ReportSection[],
+  filename: string,
+) {
+  const doc = new jsPDF({ unit: "pt", format: "a4" }) as JsPdfWithAutoTable;
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const margin = 40;
+  let y = 46;
+
+  // ---- Header: company name, report title, meta line ----
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(18);
+  doc.setTextColor(...PDF_COLORS.text);
+  doc.text(COMPANY_NAME, pageWidth / 2, y, { align: "center" });
+  y += 20;
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(11);
+  doc.setTextColor(...PDF_COLORS.primary);
+  doc.text(meta.title.toUpperCase(), pageWidth / 2, y, { align: "center" });
+  y += 14;
+
+  doc.setDrawColor(...PDF_COLORS.primary);
+  doc.setLineWidth(1.4);
+  doc.line(margin, y, pageWidth - margin, y);
+  y += 16;
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  doc.setTextColor(...PDF_COLORS.muted);
+  const metaLine = `Period: ${meta.period}    |    Scope: ${meta.scope || "All"}    |    Generated: ${new Date().toLocaleString()}    |    Generated by: ${meta.generatedBy}`;
+  doc.text(metaLine, pageWidth / 2, y, { align: "center" });
+  y += 22;
+
+  // ---- Executive summary ----
+  if (summary.length > 0) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(11);
+    doc.setTextColor(...PDF_COLORS.text);
+    doc.text("Executive Summary", margin, y);
+    y += 6;
+    doc.setDrawColor(...PDF_COLORS.border);
+    doc.setLineWidth(0.5);
+    doc.line(margin, y + 4, pageWidth - margin, y + 4);
+    y += 16;
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(...PDF_COLORS.text);
+    summary.forEach((line) => {
+      doc.text(`•  ${line}`, margin, y);
+      y += 14;
+    });
+    y += 10;
+  }
+
+  // ---- Tables ----
+  sections.forEach((section) => {
+    if (section.rows.length === 0) return;
+
+    if (y > pageHeight - 140) {
+      doc.addPage();
+      y = 46;
+    }
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10.5);
+    doc.setTextColor(...PDF_COLORS.text);
+    doc.text(section.heading, margin, y);
+    y += 8;
+
+    doc.autoTable({
+      startY: y,
+      head: [section.headers],
+      body: section.rows,
+      margin: { left: margin, right: margin, bottom: 56 },
+      theme: "grid",
+      styles: {
+        fontSize: 8.3,
+        cellPadding: 5.5,
+        textColor: PDF_COLORS.text,
+        lineColor: PDF_COLORS.border,
+        lineWidth: 0.5,
+      },
+      headStyles: {
+        fillColor: PDF_COLORS.primary,
+        textColor: [255, 255, 255],
+        fontStyle: "bold",
+        halign: "left",
+      },
+      alternateRowStyles: { fillColor: PDF_COLORS.altRow },
+      columnStyles: pdfColumnStyles(section.headers, section.numericColumns),
+      showHead: "everyPage",
+    });
+
+    y = doc.lastAutoTable.finalY + 26;
+  });
+
+  // ---- Signature section ----
+  if (y > pageHeight - 120) {
+    doc.addPage();
+    y = 60;
+  } else {
+    y += 14;
+  }
+
+  doc.setDrawColor(150, 150, 150);
+  doc.setLineWidth(0.6);
+  doc.line(margin, y, margin + 180, y);
+  doc.line(pageWidth - margin - 180, y, pageWidth - margin, y);
+  y += 12;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  doc.setTextColor(...PDF_COLORS.muted);
+  doc.text("Prepared by", margin, y);
+  doc.text("Approved by", pageWidth - margin - 180, y);
+
+  addPdfFootersAndPageNumbers(doc);
+  doc.save(filename);
+}
+
+async function buildExcelReport(
+  meta: ReportMeta,
+  summary: string[],
+  sections: ReportSection[],
+  filename: string,
+) {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = COMPANY_NAME;
+  wb.created = new Date();
+
+  const PRIMARY_ARGB = "FF2E9E8F";
+  const MUTED_ARGB = "FF6B7B78";
+  const ALT_ARGB = "FFF3F6F5";
+  const BORDER_ARGB = "FFDDE4E2";
+
+  // ---- Summary sheet ----
+  const summarySheet = wb.addWorksheet("Summary");
+  summarySheet.getColumn(1).width = 90;
+  summarySheet.mergeCells(1, 1, 1, 1);
+  const titleCell = summarySheet.getCell("A1");
+  titleCell.value = COMPANY_NAME;
+  titleCell.font = { bold: true, size: 16 };
+  titleCell.alignment = { horizontal: "center" };
+
+  const subCell = summarySheet.getCell("A2");
+  subCell.value = meta.title;
+  subCell.font = { bold: true, size: 12, color: { argb: PRIMARY_ARGB } };
+  subCell.alignment = { horizontal: "center" };
+
+  const metaCell = summarySheet.getCell("A3");
+  metaCell.value = `Period: ${meta.period}   |   Scope: ${meta.scope || "All"}   |   Generated: ${new Date().toLocaleString()}   |   Generated by: ${meta.generatedBy}`;
+  metaCell.font = { italic: true, size: 9, color: { argb: MUTED_ARGB } };
+  metaCell.alignment = { horizontal: "center" };
+
+  summarySheet.addRow([]);
+  const summaryHeader = summarySheet.addRow(["Executive Summary"]);
+  summaryHeader.getCell(1).font = { bold: true, size: 11 };
+
+  summary.forEach((line) => {
+    const row = summarySheet.addRow([`•  ${line}`]);
+    row.getCell(1).font = { size: 10 };
+  });
+
+  // ---- One sheet per section ----
+  sections.forEach((section, idx) => {
+    if (section.rows.length === 0) return;
+    const safeName = section.heading.replace(/[\\/*?:[\]]/g, "").slice(0, 31) || `Table ${idx + 1}`;
+    const ws = wb.addWorksheet(safeName);
+
+    const colCount = section.headers.length;
+    ws.mergeCells(1, 1, 1, colCount);
+    const wsTitle = ws.getCell(1, 1);
+    wsTitle.value = COMPANY_NAME;
+    wsTitle.font = { bold: true, size: 14 };
+    wsTitle.alignment = { horizontal: "center" };
+
+    ws.mergeCells(2, 1, 2, colCount);
+    const wsSub = ws.getCell(2, 1);
+    wsSub.value = `${meta.title} — ${section.heading}`;
+    wsSub.font = { bold: true, size: 11, color: { argb: PRIMARY_ARGB } };
+    wsSub.alignment = { horizontal: "center" };
+
+    ws.mergeCells(3, 1, 3, colCount);
+    const wsMeta = ws.getCell(3, 1);
+    wsMeta.value = `Period: ${meta.period}   |   Generated: ${new Date().toLocaleString()}   |   By: ${meta.generatedBy}`;
+    wsMeta.font = { italic: true, size: 9, color: { argb: MUTED_ARGB } };
+    wsMeta.alignment = { horizontal: "center" };
+
+    ws.addRow([]);
+    const headerRow = ws.addRow(section.headers);
+    headerRow.eachCell((cell) => {
+      cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: PRIMARY_ARGB } };
+      cell.alignment = { horizontal: "left", vertical: "middle" };
+      cell.border = {
+        top: { style: "thin", color: { argb: BORDER_ARGB } },
+        left: { style: "thin", color: { argb: BORDER_ARGB } },
+        bottom: { style: "thin", color: { argb: BORDER_ARGB } },
+        right: { style: "thin", color: { argb: BORDER_ARGB } },
+      };
+    });
+
+    section.rows.forEach((row, i) => {
+      const r = ws.addRow(row);
+      const isAlt = i % 2 === 1;
+      r.eachCell((cell, colNumber) => {
+        cell.border = {
+          top: { style: "thin", color: { argb: BORDER_ARGB } },
+          left: { style: "thin", color: { argb: BORDER_ARGB } },
+          bottom: { style: "thin", color: { argb: BORDER_ARGB } },
+          right: { style: "thin", color: { argb: BORDER_ARGB } },
+        };
+        if (isAlt) {
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: ALT_ARGB } };
+        }
+        if (section.numericColumns?.includes(colNumber - 1)) {
+          cell.alignment = { horizontal: "right" };
+        }
+      });
+    });
+
+    section.headers.forEach((h, i) => {
+      let maxLen = h.length;
+      section.rows.forEach((row) => {
+        const len = String(row[i] ?? "").length;
+        if (len > maxLen) maxLen = len;
+      });
+      ws.getColumn(i + 1).width = Math.min(Math.max(maxLen + 4, 12), 42);
+    });
+
+    ws.views = [{ state: "frozen", ySplit: 5 }];
+  });
+
+  const buffer = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buffer], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function csvEscape(value: string | number): string {
+  const str = String(value ?? "");
+  return `"${str.replace(/"/g, '""')}"`;
+}
+
+function buildCsvReport(
+  meta: ReportMeta,
+  summary: string[],
+  sections: ReportSection[],
+  filename: string,
+) {
+  const lines: string[] = [];
+  lines.push(csvEscape(COMPANY_NAME));
+  lines.push(csvEscape(meta.title));
+  lines.push(csvEscape(`Period: ${meta.period}`));
+  lines.push(csvEscape(`Scope: ${meta.scope || "All"}`));
+  lines.push(csvEscape(`Generated: ${new Date().toLocaleString()} by ${meta.generatedBy}`));
+  lines.push("");
+
+  if (summary.length > 0) {
+    lines.push(csvEscape("Executive Summary"));
+    summary.forEach((line) => lines.push(csvEscape(line)));
+    lines.push("");
+  }
+
+  sections.forEach((section) => {
+    if (section.rows.length === 0) return;
+    lines.push(csvEscape(section.heading));
+    lines.push(section.headers.map(csvEscape).join(","));
+    section.rows.forEach((row) => {
+      lines.push(row.map(csvEscape).join(","));
+    });
+    lines.push("");
+  });
+
+  const csv = lines.join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/* ============================================================================
+   END EXPORT ENGINE
+============================================================================ */
 
 function inRange(
   date: string,
@@ -85,11 +466,11 @@ const REPORT_TYPES: {
   label: string;
   icon: React.ElementType;
 }[] = [
-    { id: "sales", label: "Sales", icon: FileText },
-    { id: "stock", label: "Stock Movement", icon: Package },
-    { id: "loans", label: "Loans", icon: CreditCard },
-    { id: "payments", label: "Payments", icon: Banknote },
-  ];
+  { id: "sales", label: "Sales", icon: FileText },
+  { id: "stock", label: "Stock Movement", icon: Package },
+  { id: "loans", label: "Loans", icon: CreditCard },
+  { id: "payments", label: "Payments", icon: Banknote },
+];
 
 const dateLabel: Record<DateFilter, string> = {
   daily: "Today",
@@ -98,7 +479,6 @@ const dateLabel: Record<DateFilter, string> = {
   annual: "This Year",
   custom: "Custom Range",
 };
-
 
 export default function Report() {
   const { state } = useStore();
@@ -120,6 +500,7 @@ export default function Report() {
 
   const [hiddenSections, setHiddenSections] = useState<Record<string, boolean>>({});
   const [maSection, setMaSection] = useState<"sales" | "clients" | "payments">("sales");
+  const [isExportingExcel, setIsExportingExcel] = useState(false);
 
   const toggleSection = (key: string) => {
     setHiddenSections((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -130,9 +511,6 @@ export default function Report() {
 
   const getName = (id: string, list: { id: string; name: string }[]) =>
     list.find((i) => i.id === id)?.name ?? "—";
-
-  const getBuyerLabel = (r: AgentReport) =>
-    r.clientId ? getName(r.clientId, clients) : r.customerName?.trim() || "Walk-in customer";
 
   const inDateRange = (date: string) =>
     inRange(date, dateFilter, customFrom, customTo);
@@ -159,13 +537,6 @@ export default function Report() {
     clientFilter,
     agentFilter,
   ]);
-
-  const salesPayments = useMemo(() => {
-    const clientIds = new Set(salesFiltered.map((r) => r.clientId));
-    return state.payments.filter(
-      (p) => inDateRange(p.date) && clientIds.has(p.clientId),
-    );
-  }, [state.payments, salesFiltered, dateFilter, customFrom, customTo]);
 
   const salesQty = salesFiltered.reduce((s, r) => s + r.qty, 0);
   const salesRevenue = salesFiltered.reduce((s, r) => s + r.totalPrice, 0);
@@ -346,165 +717,181 @@ export default function Report() {
     return "—";
   };
 
-  const handleExportStockCSV = () => {
-    const csvHeaders = [
-      "Date",
-      "Products Name",
-      "Type",
-      "Agent",
-      "Location",
-      "Stock In",
-      "Stock Out",
-      "Balance",
-    ];
-
-    const rows = stockFiltered.map((m) => {
-      const prodName = getName(m.productId, products);
-      const agName = m.agentId ? getName(m.agentId, agents) : "—";
-      const loc = m.location || "—";
-      const typeStr =
-        m.type === "production"
-          ? "Production"
-          : m.type === "marketing_agent"
-            ? "Agent Dispatch"
-            : "Other";
-      const stockInStr =
-        m.stockIn > 0 ? `${m.stockIn} boxes${m.isReturn ? " (Return)" : ""}` : "0";
-      const stockOutStr = m.stockOut > 0 ? `${m.stockOut} boxes` : "0";
-
-      return [
-        m.date,
-        `"${prodName.replace(/"/g, '""')}"`,
-        `"${typeStr}"`,
-        `"${agName.replace(/"/g, '""')}"`,
-        `"${loc.replace(/"/g, '""')}"`,
-        `"${stockInStr}"`,
-        `"${stockOutStr}"`,
-        `"${m.balance} boxes"`,
-      ];
-    });
-
-    const csvContent =
-      "data:text/csv;charset=utf-8," +
-      [csvHeaders.join(","), ...rows.map((r) => r.join(","))].join("\n");
-
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute(
-      "download",
-      `Stock_Movement_Record_${new Date().toISOString().slice(0, 10)}.csv`,
-    );
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  /* ---------------- CSV EXPORT ---------------- */
-  const handleExportCsv = () => {
-    let rows: string[][] = [];
-    let filename = "";
-
-    if (reportType === "sales") {
-      rows = [
-        [
-          "Date",
-          "Agent",
-          "Client",
-          "Product",
-          "Qty",
-          "Unit Price",
-          "Total",
-          "Status",
-        ],
-        ...salesFiltered.map((r) => [
-          r.date,
-          getName(r.agentId, agents),
-          getName(r.clientId, clients),
-          getName(r.productId, products),
-          r.qty.toString(),
-          r.unitPrice.toString(),
-          r.totalPrice.toString(),
-          r.paymentStatus,
-        ]),
-      ];
-      filename = "sales-report";
-    } else if (reportType === "stock") {
-      rows = [
-        [
-          "Date",
-          "Product",
-          "Type",
-          "Agent",
-          "Location",
-          "Stock In",
-          "Stock Out",
-          "Balance",
-        ],
-        ...stockFiltered.map((m) => [
-          m.date,
-          getName(m.productId, products),
-          m.type,
-          m.agentId ? getName(m.agentId, agents) : "",
-          m.location ?? "",
-          m.stockIn.toString(),
-          m.stockOut.toString(),
-          m.balance.toString(),
-        ]),
-      ];
-      filename = "stock-report";
-    } else if (reportType === "loans") {
-      rows = [
-        [
-          "Client",
-          "District",
-          "Qty (period)",
-          "Loan Issued (period)",
-          "Payments Received (period)",
-          "Current Outstanding",
-        ],
-        ...loansByClient.map((l) => [
-          l.client.name,
-          l.client.district,
-          l.qty.toString(),
-          l.issued.toString(),
-          l.paidInRange.toString(),
-          l.outstanding.toString(),
-        ]),
-      ];
-      filename = "loans-report";
-    } else {
-      rows = [
-        ["Date", "Client", "Amount", "Mode", "Reference"],
-        ...paymentsFiltered.map((p) => [
-          p.date,
-          getName(p.clientId, clients),
-          p.amount.toString(),
-          p.mode,
-          paymentReference(p),
-        ]),
-      ];
-      filename = "payments-report";
-    }
-
-    const csv = rows
-      .map((row) => row.map((cell) => `"${cell}"`).join(","))
-      .join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `soapflow-${filename}-${today()}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
   const scopeLabel =
     clientFilter !== "all"
       ? getName(clientFilter, clients)
       : agentFilter !== "all"
         ? getName(agentFilter, agents)
         : "";
+
+  /* ============================================================
+     ADMIN EXPORT DATA BUILDERS
+     Each returns { meta, summary, sections } — business data ONLY,
+     no dashboard cards, charts, graphs, or widgets.
+  ============================================================ */
+  const getAdminReportData = (): { meta: ReportMeta; summary: string[]; sections: ReportSection[] } => {
+    const meta: ReportMeta = {
+      title:
+        reportType === "sales"
+          ? "Sales Report"
+          : reportType === "stock"
+            ? "Stock Movement Report"
+            : reportType === "loans"
+              ? "Loans Report"
+              : "Payments Report",
+      period: dateLabel[dateFilter],
+      scope: scopeLabel || "All",
+      generatedBy: state.user?.name ?? "Administrator",
+    };
+
+    if (reportType === "sales") {
+      const summary = [
+        `Total Revenue: ${fmt(salesRevenue)}`,
+        `Boxes Sold: ${salesQty.toLocaleString()}`,
+        `Outstanding (Loans): ${fmt(salesOutstanding)}`,
+        `Active Agents: ${salesByAgent.length}`,
+        `Total Transactions: ${salesFiltered.length}`,
+      ];
+      const sections: ReportSection[] = [
+        {
+          heading: "Sales by Product",
+          headers: ["Product", "Revenue"],
+          rows: salesByProduct.map((p) => [p.name, fmt(p.revenue)]),
+          numericColumns: [1],
+        },
+        {
+          heading: "Sales by Agent",
+          headers: ["Agent", "Revenue"],
+          rows: salesByAgent.map((a) => [a.name, fmt(a.revenue)]),
+          numericColumns: [1],
+        },
+        {
+          heading: "Transaction Detail",
+          headers: ["Date", "Agent", "Client", "Product", "Qty", "Total", "Status"],
+          rows: salesFiltered
+            .slice()
+            .sort((a, b) => b.date.localeCompare(a.date))
+            .map((r) => [
+              fmtDate(r.date),
+              getName(r.agentId, agents),
+              getName(r.clientId, clients),
+              getName(r.productId, products),
+              r.qty,
+              fmt(r.totalPrice),
+              r.paymentStatus === "paid" ? "Paid" : "Loan",
+            ]),
+          numericColumns: [4, 5],
+        },
+      ];
+      return { meta, summary, sections };
+    }
+
+    if (reportType === "stock") {
+      const summary = [
+        `Stock In: ${stockIn.toLocaleString()} boxes`,
+        `Stock Out: ${stockOut.toLocaleString()} boxes`,
+        `Net Change: ${stockNet >= 0 ? "+" : ""}${stockNet.toLocaleString()} boxes`,
+        `Current Balance: ${currentBalance.toLocaleString()} boxes`,
+        `Total Records: ${stockFiltered.length}`,
+      ];
+      const sections: ReportSection[] = [
+        {
+          heading: "Stock Movement Detail",
+          headers: ["Date", "Product", "Type", "Agent", "Location", "Stock In", "Stock Out", "Balance"],
+          rows: stockFiltered
+            .slice()
+            .sort((a, b) => b.date.localeCompare(a.date))
+            .map((m) => [
+              fmtDate(m.date),
+              getName(m.productId, products),
+              m.type === "production" ? "Production" : m.type === "marketing_agent" ? "Agent Dispatch" : "Other",
+              m.agentId ? getName(m.agentId, agents) : "—",
+              m.location || "—",
+              m.stockIn > 0 ? `+${m.stockIn}${m.isReturn ? " (Return)" : ""}` : "0",
+              m.stockOut > 0 ? `-${m.stockOut}` : "0",
+              m.balance.toLocaleString(),
+            ]),
+          numericColumns: [5, 6, 7],
+        },
+      ];
+      return { meta, summary, sections };
+    }
+
+    if (reportType === "loans") {
+      const summary = [
+        `Loans Issued (period): ${fmt(loansIssued)}`,
+        `Payments Received (period): ${fmt(loanPaymentsReceived)}`,
+        `Net Change: ${fmt(loansIssued - loanPaymentsReceived)}`,
+        `Active Clients: ${loansByClient.length}`,
+      ];
+      const sections: ReportSection[] = [
+        {
+          heading: "Top Outstanding Clients",
+          headers: ["Client", "Outstanding"],
+          rows: loansChartData.map((l) => [l.name, fmt(l.Outstanding)]),
+          numericColumns: [1],
+        },
+        {
+          heading: "Client Loan Detail",
+          headers: ["Client", "District", "Qty (period)", "Issued (period)", "Paid (period)", "Outstanding"],
+          rows: loansByClient.map((l) => [
+            l.client.name,
+            l.client.district,
+            l.qty,
+            fmt(l.issued),
+            fmt(l.paidInRange),
+            fmt(l.outstanding),
+          ]),
+          numericColumns: [2, 3, 4, 5],
+        },
+      ];
+      return { meta, summary, sections };
+    }
+
+    // payments
+    const summary = [
+      `Total Received: ${fmt(paymentsTotal)}`,
+      ...paymentsByMode.map((m) => `${m.name}: ${fmt(m.value)}`),
+      `Total Payments: ${paymentsFiltered.length}`,
+    ];
+    const sections: ReportSection[] = [
+      {
+        heading: "Payment Detail",
+        headers: ["Date", "Client", "Amount", "Mode", "Reference"],
+        rows: paymentsFiltered.map((p) => [
+          fmtDate(p.date),
+          getName(p.clientId, clients),
+          fmt(p.amount),
+          p.mode === "telephone" ? "Mobile Money" : p.mode === "bank" ? "Bank" : "Cash",
+          paymentReference(p),
+        ]),
+        numericColumns: [2],
+      },
+    ];
+    return { meta, summary, sections };
+  };
+
+  const exportFilenameBase = () => `soapflow-${reportType}-report-${today()}`;
+
+  const handleExportPdf = () => {
+    const { meta, summary, sections } = getAdminReportData();
+    buildPdfReport(meta, summary, sections, `${exportFilenameBase()}.pdf`);
+  };
+
+  const handleExportExcel = async () => {
+    setIsExportingExcel(true);
+    try {
+      const { meta, summary, sections } = getAdminReportData();
+      await buildExcelReport(meta, summary, sections, `${exportFilenameBase()}.xlsx`);
+    } finally {
+      setIsExportingExcel(false);
+    }
+  };
+
+  const handleExportCsv = () => {
+    const { meta, summary, sections } = getAdminReportData();
+    buildCsvReport(meta, summary, sections, `${exportFilenameBase()}.csv`);
+  };
 
   /* ============================================================
      STOCK AGENT — completely separate report UI
@@ -534,10 +921,10 @@ export default function Report() {
     const saTable = [...saFiltered].sort((a, b) => b.date.localeCompare(a.date));
 
     const saKpis = [
-      { label: "Total In", value: `+${saIn.toLocaleString()}`, sub: "boxes received", color: "#3FA66B" },
-      { label: "Total Out", value: `-${saOut.toLocaleString()}`, sub: "boxes dispatched", color: "#E05C5C" },
-      { label: "Net Change", value: (saNet >= 0 ? "+" : "") + saNet.toLocaleString(), sub: "net movement", color: "#2E9E8F" },
-      { label: "Entries", value: saCount.toLocaleString(), sub: "total records", color: "#D99A3D" },
+      { label: "Total In", value: `+${saIn.toLocaleString()}`, sub: "boxes received", color: "#3FA66B", icon: ArrowDownCircle },
+      { label: "Total Out", value: `-${saOut.toLocaleString()}`, sub: "boxes dispatched", color: "#E05C5C", icon: ArrowUpCircle },
+      { label: "Net Change", value: (saNet >= 0 ? "+" : "") + saNet.toLocaleString(), sub: "net movement", color: "#2E9E8F", icon: BarChart3 },
+      { label: "Entries", value: saCount.toLocaleString(), sub: "total records", color: "#D99A3D", icon: Package },
     ];
 
     const SA_DATE_FILTERS: { id: DateFilter; label: string }[] = [
@@ -552,71 +939,121 @@ export default function Report() {
     const getAgentName = (aid?: string) =>
       aid ? agents.find((a) => a.id === aid)?.name ?? "—" : "—";
 
-    const handleStockAgentExport = () => {
-      const rows = [
-        ["Date", "Product", "Description", "Agent / Location", "Stock In", "Stock Out", "Balance"],
-        ...saTable.map((m) => [
-          m.date,
-          getProductName(m.productId),
-          movementLabel(m.type),
-          m.agentId ? `${getAgentName(m.agentId)} ${m.location ? `(${m.location})` : ""}` : "—",
-          m.stockIn > 0 ? (m.unit === "piece" && m.enteredQty ? `${m.enteredQty} pcs (${m.stockIn} boxes)` : `${m.stockIn} boxes`) : "0",
-          m.stockOut > 0 ? (m.unit === "piece" && m.enteredQty ? `${m.enteredQty} pcs (${m.stockOut} boxes)` : `${m.stockOut} boxes`) : "0",
-          `${m.balance} boxes`,
-        ]),
-      ];
-      const csv = rows.map((r) => r.map((cell) => `"${cell}"`).join(",")).join("\n");
-      const blob = new Blob([csv], { type: "text/csv" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `soapflow-stock-report-${today()}.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
+    const getStockAgentReportData = (): { meta: ReportMeta; summary: string[]; sections: ReportSection[] } => ({
+      meta: {
+        title: "Stock Movement Report",
+        period: dateLabel[dateFilter],
+        scope: agentFilter !== "all" ? getAgentName(agentFilter) : "All Agents",
+        generatedBy: state.user?.name ?? "Stock Agent",
+      },
+      summary: [
+        `Total In: +${saIn.toLocaleString()} boxes`,
+        `Total Out: -${saOut.toLocaleString()} boxes`,
+        `Net Change: ${saNet >= 0 ? "+" : ""}${saNet.toLocaleString()} boxes`,
+        `Total Entries: ${saCount}`,
+      ],
+      sections: [
+        {
+          heading: "Movement Records",
+          headers: ["Date", "Product", "Description", "Agent / Location", "Stock In", "Stock Out", "Balance"],
+          rows: saTable.map((m) => [
+            fmtDate(m.date),
+            getProductName(m.productId),
+            movementLabel(m.type),
+            m.agentId ? `${getAgentName(m.agentId)}${m.location ? ` (${m.location})` : ""}` : "—",
+            m.stockIn > 0 ? (m.unit === "piece" && m.enteredQty ? `${m.enteredQty} pcs (${m.stockIn} boxes)` : `+${m.stockIn}`) : "0",
+            m.stockOut > 0 ? (m.unit === "piece" && m.enteredQty ? `${m.enteredQty} pcs (${m.stockOut} boxes)` : `-${m.stockOut}`) : "0",
+            m.balance.toLocaleString(),
+          ]),
+          numericColumns: [4, 5, 6],
+        },
+      ],
+    });
+
+    const saFilenameBase = () => `soapflow-stock-report-${today()}`;
+
+    const handleSaExportPdf = () => {
+      const { meta, summary, sections } = getStockAgentReportData();
+      buildPdfReport(meta, summary, sections, `${saFilenameBase()}.pdf`);
+    };
+    const handleSaExportExcel = async () => {
+      setIsExportingExcel(true);
+      try {
+        const { meta, summary, sections } = getStockAgentReportData();
+        await buildExcelReport(meta, summary, sections, `${saFilenameBase()}.xlsx`);
+      } finally {
+        setIsExportingExcel(false);
+      }
+    };
+    const handleSaExportCsv = () => {
+      const { meta, summary, sections } = getStockAgentReportData();
+      buildCsvReport(meta, summary, sections, `${saFilenameBase()}.csv`);
     };
 
     return (
       <div className="p-4 sm:p-6 lg:p-8 max-w-7xl">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 no-print">
-          <div>
-            <h1 className="text-xl sm:text-2xl font-bold text-foreground">Stock Report</h1>
-            <p className="text-sm text-muted mt-1">Personalised stock movement report · {dateLabel[dateFilter]}</p>
-          </div>
-          <div className="flex items-center gap-2">
-            {hiddenCount > 0 && (
+        {/* Premium accent banner */}
+        <div className="relative overflow-hidden rounded-[var(--radius-lg)] bg-primary text-white p-5 sm:p-7 mb-6 shadow-lg">
+          <div className="pointer-events-none absolute -right-10 -top-14 w-48 h-48 rounded-full bg-white/10" />
+          <div className="pointer-events-none absolute -right-28 top-6 w-64 h-64 rounded-full bg-white/[0.06]" />
+          <div className="relative flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <div className="inline-flex items-center gap-1.5 bg-white/15 backdrop-blur-sm px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wider mb-2.5">
+                <Package size={11} />
+                Stock Agent
+              </div>
+              <h1 className="text-xl sm:text-2xl font-bold">Stock Report</h1>
+              <p className="text-xs sm:text-sm text-white/80 mt-1">
+                {dateLabel[dateFilter]} · {saCount.toLocaleString()} movement{saCount !== 1 ? "s" : ""} recorded
+              </p>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              {hiddenCount > 0 && (
+                <button
+                  onClick={resetHiddenSections}
+                  className="flex items-center gap-1 text-xs font-semibold text-white bg-white/15 hover:bg-white/25 border border-white/20 px-3 py-2 rounded-[var(--radius)] transition-colors backdrop-blur-sm"
+                >
+                  <RotateCcw size={12} /> Show all ({hiddenCount})
+                </button>
+              )}
               <button
-                onClick={resetHiddenSections}
-                className="flex items-center gap-1 text-xs font-semibold text-amber-800 bg-amber-50 border border-amber-200 px-3 py-2 rounded-[var(--radius)] hover:bg-amber-100 transition-colors"
+                onClick={handleSaExportCsv}
+                className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-white/15 hover:bg-white/25 text-white border border-white/20 rounded-[var(--radius)] transition-colors backdrop-blur-sm"
               >
-                <RotateCcw size={12} /> Show all ({hiddenCount} hidden)
+                <Download size={15} />
+                <span>CSV</span>
               </button>
-            )}
-            <button
-              onClick={() => window.print()}
-              className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-card border border-border text-foreground rounded-[var(--radius)] hover:bg-accent/40 transition-colors shadow-sm"
-            >
-              <Printer size={15} />
-              <span>Print / PDF</span>
-            </button>
-            <button
-              onClick={handleStockAgentExport}
-              className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-primary text-white rounded-[var(--radius)] hover:bg-primary/90 transition-colors shadow-sm"
-            >
-              <Download size={15} />
-              <span>Export Excel</span>
-            </button>
+              <button
+                onClick={handleSaExportExcel}
+                disabled={isExportingExcel}
+                className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-white/15 hover:bg-white/25 text-white border border-white/20 rounded-[var(--radius)] transition-colors backdrop-blur-sm disabled:opacity-60"
+              >
+                <FileSpreadsheet size={15} />
+                <span>{isExportingExcel ? "Preparing..." : "Excel"}</span>
+              </button>
+              <button
+                onClick={handleSaExportPdf}
+                className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-white/15 hover:bg-white/25 text-white border border-white/20 rounded-[var(--radius)] transition-colors backdrop-blur-sm"
+              >
+                <FileText size={15} />
+                <span>PDF</span>
+              </button>
+            </div>
           </div>
         </div>
 
         {/* Filter bar */}
-        <div className="bg-card border border-border rounded-[var(--radius-lg)] p-4 mb-6 flex flex-wrap gap-3 items-end no-print">
-          <div className="flex flex-wrap gap-1.5">
-            {SA_DATE_FILTERS.map((f) => (
-              <button key={f.id} onClick={() => setDateFilter(f.id)}
-                className={`px-3 py-1.5 text-xs font-medium rounded-[var(--radius)] transition-colors ${dateFilter === f.id ? "bg-primary text-white" : "bg-background border border-border text-muted hover:text-foreground"}`}>
-                {f.label}
-              </button>
-            ))}
+        <div className="bg-card border border-border rounded-[var(--radius-lg)] p-4 mb-6 flex flex-wrap gap-3 items-end shadow-sm">
+          <div>
+            <label className="text-[10px] font-semibold text-muted uppercase tracking-wide block mb-1.5">Period</label>
+            <div className="flex flex-wrap gap-1.5">
+              {SA_DATE_FILTERS.map((f) => (
+                <button key={f.id} onClick={() => setDateFilter(f.id)}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-[var(--radius)] transition-colors ${dateFilter === f.id ? "bg-primary text-white shadow-sm" : "bg-background border border-border text-muted hover:text-foreground"}`}>
+                  {f.label}
+                </button>
+              ))}
+            </div>
           </div>
           {dateFilter === "custom" && (
             <div className="flex flex-wrap gap-2 items-center">
@@ -628,7 +1065,7 @@ export default function Report() {
             </div>
           )}
           <div className="ml-auto">
-            <label className="text-[10px] text-muted uppercase tracking-wide block mb-1">Agent</label>
+            <label className="text-[10px] font-semibold text-muted uppercase tracking-wide block mb-1.5">Agent</label>
             <select value={agentFilter} onChange={(e) => setAgentFilter(e.target.value)}
               className="px-3 py-1.5 text-xs border border-border rounded-[var(--radius)] bg-white focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary">
               <option value="all">All Agents</option>
@@ -637,29 +1074,30 @@ export default function Report() {
           </div>
         </div>
 
-        {/* Printable company header */}
-        <div className="hidden print:block mb-6 border-b border-border pb-4">
-          <div className="text-xl font-bold text-foreground uppercase tracking-wide">{COMPANY_NAME}</div>
-          <div className="text-base font-semibold text-primary mt-0.5">STOCK MOVEMENT REPORT</div>
-          <div className="text-xs text-muted mt-1">Period: {dateLabel[dateFilter]} · Generated: {new Date().toLocaleString()}</div>
-        </div>
-
         {/* KPI cards */}
         {!isHidden("sa-kpis") && (
           <div className="relative mb-6">
             <button
               onClick={() => toggleSection("sa-kpis")}
-              title="Hide KPI cards from report"
-              className="no-print absolute -top-3 right-2 p-1 bg-card border border-border text-muted hover:text-danger hover:bg-danger/10 rounded-full transition-colors shadow-xs z-10"
+              title="Hide KPI cards"
+              className="absolute -top-3 right-2 p-1 bg-card border border-border text-muted hover:text-danger hover:bg-danger/10 rounded-full transition-colors shadow-xs z-10"
             >
               <Minus size={12} />
             </button>
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
               {saKpis.map((k) => (
-                <div key={k.label} className="bg-card border border-border rounded-[var(--radius-lg)] p-4 sm:p-5 hover:shadow-md hover:-translate-y-0.5 transition-all duration-200">
-                  <div className="text-lg sm:text-xl font-bold leading-tight" style={{ color: k.color }}>{k.value}</div>
-                  <div className="text-[11px] text-muted mt-1">{k.label}</div>
-                  <div className="text-[10px] text-muted/70">{k.sub}</div>
+                <div key={k.label} className="group relative bg-card border border-border rounded-[var(--radius-lg)] p-4 sm:p-5 overflow-hidden hover:shadow-md transition-all duration-200">
+                  <div className="absolute top-0 left-0 right-0 h-[3px]" style={{ background: k.color + "40" }} />
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-[var(--radius)] flex items-center justify-center flex-shrink-0" style={{ background: k.color + "12" }}>
+                      <k.icon size={18} style={{ color: k.color }} />
+                    </div>
+                    <div>
+                      <div className="text-[11px] font-semibold text-muted uppercase tracking-wide">{k.label}</div>
+                      <div className="text-lg sm:text-xl font-bold leading-tight" style={{ color: k.color }}>{k.value}</div>
+                      <div className="text-[10px] text-muted/70">{k.sub}</div>
+                    </div>
+                  </div>
                 </div>
               ))}
             </div>
@@ -668,7 +1106,7 @@ export default function Report() {
 
         {/* Area chart */}
         {!isHidden("sa-trend") && (
-          <div className="bg-card border border-border rounded-[var(--radius-lg)] p-4 sm:p-6 mb-6 hover:shadow-md transition-shadow duration-200">
+          <div className="bg-card border border-border rounded-[var(--radius-lg)] p-4 sm:p-6 mb-6">
             <div className="flex items-start justify-between mb-0.5">
               <div>
                 <h3 className="text-sm font-semibold text-foreground mb-0.5">Movement Trend</h3>
@@ -676,8 +1114,8 @@ export default function Report() {
               </div>
               <button
                 onClick={() => toggleSection("sa-trend")}
-                title="Hide chart from report"
-                className="no-print p-1 text-muted hover:text-danger hover:bg-danger/10 rounded transition-colors"
+                title="Hide chart"
+                className="p-1 text-muted hover:text-danger hover:bg-danger/10 rounded transition-colors"
               >
                 <Minus size={14} />
               </button>
@@ -701,7 +1139,10 @@ export default function Report() {
                   <XAxis dataKey="date" tick={{ fontSize: 9, fill: "#6B7B78" }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
                   <YAxis tick={{ fontSize: 9, fill: "#6B7B78" }} tickLine={false} axisLine={false} />
                   <Tooltip contentStyle={{ fontSize: 12, border: "1px solid #E4EAE8", borderRadius: 8, boxShadow: "0 4px 12px rgba(0,0,0,0.08)" }}
-                    formatter={(v: any, name: any) => [`${v} boxes`, name]} />
+                    formatter={(v: any, name: any) =>
+                      [<span style={{ fontWeight: 600 }}>{v}</span>, name]
+                    }
+                  />
                   <Legend iconSize={8} iconType="circle" wrapperStyle={{ fontSize: 11 }} />
                   <Area type="monotone" dataKey="In" stroke="#3FA66B" strokeWidth={2} fill="url(#saGradIn)" dot={false} />
                   <Area type="monotone" dataKey="Out" stroke="#E05C5C" strokeWidth={2} fill="url(#saGradOut)" dot={false} />
@@ -713,16 +1154,16 @@ export default function Report() {
 
         {/* Movements table */}
         {!isHidden("sa-table") && (
-          <div className="bg-card border border-border rounded-[var(--radius-lg)] overflow-hidden">
-            <div className="px-4 sm:px-6 py-4 border-b border-border flex items-center justify-between gap-2">
+          <div className="bg-card border border-border rounded-[var(--radius-lg)] overflow-hidden shadow-sm">
+            <div className="px-4 sm:px-6 py-4 border-b border-border flex items-center justify-between gap-2 bg-gradient-to-r from-primary/[0.04] to-transparent">
               <div>
-                <h3 className="text-sm font-semibold text-foreground">Movement Records</h3>
+                <h3 className="text-sm font-bold text-foreground">Movement Records</h3>
                 <p className="text-xs text-muted mt-0.5">{saTable.length} entries — {dateLabel[dateFilter]}</p>
               </div>
               <button
                 onClick={() => toggleSection("sa-table")}
-                title="Hide table from report"
-                className="no-print p-1 text-muted hover:text-danger hover:bg-danger/10 rounded transition-colors flex-shrink-0"
+                title="Hide table"
+                className="p-1 text-muted hover:text-danger hover:bg-danger/10 rounded transition-colors flex-shrink-0"
               >
                 <Minus size={14} />
               </button>
@@ -732,76 +1173,120 @@ export default function Report() {
                 <p className="text-sm text-muted">No records for this period</p>
               </div>
             ) : (
-              <>
-                <div className="hidden sm:block overflow-x-auto">
-                  <table className="w-full">
-                    <thead>
-                      <tr className="border-b border-border bg-background/50">
-                        {["Date", "Product", "Type", "Agent", "Location", "Stock In", "Stock Out", "Balance"].map((h) => (
-                          <th key={h} className="text-left text-[10px] text-muted uppercase tracking-wide px-5 py-3 whitespace-nowrap">{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {saTable.map((m, i) => (
-                        <tr key={m.id} className={`border-b border-border/50 hover:bg-accent/40 transition-colors ${i === saTable.length - 1 ? "border-b-0" : ""}`}>
-                          <td className="px-5 py-3 text-xs font-mono text-muted whitespace-nowrap">{fmtDate(m.date)}</td>
-                          <td className="px-5 py-3 text-xs font-medium text-foreground whitespace-nowrap">{getProductName(m.productId)}</td>
-                          <td className="px-5 py-3">
-                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium ${m.type === "production" ? "bg-primary/10 text-primary" : m.type === "marketing_agent" ? "bg-secondary/10 text-secondary" : m.type === "customer_sale" ? "bg-success/10 text-success" : "bg-muted/20 text-muted"}`}>
-                              {m.type === "production" ? "Production" : m.type === "marketing_agent" ? "Dispatch" : m.type === "customer_sale" ? "Customer Sale" : "Other"}
-                            </span>
-                            {m.isReturn && (
-                              <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 uppercase tracking-wide">
-                                Return
-                              </span>
-                            )}
-                          </td>
-                          <td className="px-5 py-3 text-xs text-muted whitespace-nowrap">{getAgentName(m.agentId)}</td>
-                          <td className="px-5 py-3 text-xs text-muted">{m.location ?? "—"}</td>
-                          <td className="px-5 py-3">{m.stockIn > 0 ? <span className="flex items-center gap-1 text-xs font-mono text-success"><ArrowDownCircle size={12} />+{m.stockIn}</span> : <span className="text-muted text-xs">—</span>}</td>
-                          <td className="px-5 py-3">{m.stockOut > 0 ? <span className="flex items-center gap-1 text-xs font-mono text-danger"><ArrowUpCircle size={12} />-{m.stockOut}</span> : <span className="text-muted text-xs">—</span>}</td>
-                          <td className="px-5 py-3 text-xs font-mono text-foreground whitespace-nowrap">{m.balance.toLocaleString()}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="sm:hidden divide-y divide-border/50">
-                  {saTable.map((m) => (
-                    <div key={m.id} className="px-4 py-3.5">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium ${m.type === "production" ? "bg-primary/10 text-primary" : m.type === "marketing_agent" ? "bg-secondary/10 text-secondary" : "bg-muted/20 text-muted"}`}>
-                          {m.type === "production" ? "Production" : m.type === "marketing_agent" ? "Dispatch" : m.type}
-                        </span>
-                        <div className="flex items-center gap-1.5">
+              <div className="hidden sm:block overflow-x-auto">
+                <table className="w-full border-collapse">
+                  <thead>
+                    <tr className="bg-primary/[0.07] border-b-2 border-primary/20">
+                      <th className="text-[11px] font-bold text-primary uppercase tracking-wider px-4 py-3.5 text-left">Date</th>
+                      <th className="text-[11px] font-bold text-primary uppercase tracking-wider px-4 py-3.5 text-left">Product</th>
+                      <th className="text-[11px] font-bold text-primary uppercase tracking-wider px-4 py-3.5 text-left">Type</th>
+                      <th className="text-[11px] font-bold text-primary uppercase tracking-wider px-4 py-3.5 text-left">Agent</th>
+                      <th className="text-[11px] font-bold text-primary uppercase tracking-wider px-4 py-3.5 text-left">Location</th>
+                      <th className="text-[11px] font-bold text-primary uppercase tracking-wider px-4 py-3.5 text-center">Stock In</th>
+                      <th className="text-[11px] font-bold text-primary uppercase tracking-wider px-4 py-3.5 text-center">Stock Out</th>
+                      <th className="text-[11px] font-bold text-primary uppercase tracking-wider px-4 py-3.5 text-right">Balance</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {saTable.map((m, i) => (
+                      <tr key={m.id} className={`border-b border-border/40 transition-colors ${i % 2 === 1 ? "bg-background/50" : ""} ${i === saTable.length - 1 ? "border-b-0" : ""}`}>
+                        <td className="px-4 py-3 text-xs font-mono text-muted whitespace-nowrap">{fmtDate(m.date)}</td>
+                        <td className="px-4 py-3 text-xs font-semibold text-foreground whitespace-nowrap">{getProductName(m.productId)}</td>
+                        <td className="px-4 py-3">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium ${
+                            m.type === "production" ? "bg-primary/10 text-primary" :
+                            m.type === "marketing_agent" ? "bg-secondary/10 text-secondary" :
+                            m.type === "customer_sale" ? "bg-success/10 text-success" :
+                            "bg-muted/20 text-muted"
+                          }`}>
+                            {m.type === "production" ? "Production" : m.type === "marketing_agent" ? "Dispatch" : m.type === "customer_sale" ? "Customer Sale" : "Other"}
+                          </span>
                           {m.isReturn && (
-                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 uppercase tracking-wide">
+                            <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 uppercase tracking-wide">
                               Return
                             </span>
                           )}
-                          <span className="text-[10px] font-mono text-muted">{fmtDate(m.date)}</span>
-                        </div>
-                      </div>
-                      <div className="text-xs font-medium text-foreground mb-1">{getProductName(m.productId)}</div>
-                      {m.agentId && <div className="text-[11px] text-muted mb-1">{getAgentName(m.agentId)}{m.location ? " · " + m.location : ""}</div>}
-                      <div className="flex items-center justify-between mt-2">
-                        <div className="flex gap-4">
-                          {m.stockIn > 0 && <span className="text-xs font-mono text-success">+{m.stockIn}</span>}
-                          {m.stockOut > 0 && <span className="text-xs font-mono text-danger">-{m.stockOut}</span>}
-                        </div>
-                        <span className="text-xs text-muted">Bal: <span className="font-mono text-foreground">{m.balance.toLocaleString()}</span></span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </>
+                        </td>
+                        <td className="px-4 py-3 text-xs text-muted whitespace-nowrap">{getAgentName(m.agentId)}</td>
+                        <td className="px-4 py-3 text-xs text-muted">{m.location ?? "—"}</td>
+                        <td className="px-4 py-3 text-center">
+                          {m.stockIn > 0 ? (
+                            <span className="inline-flex items-center gap-1 text-xs font-mono font-semibold text-success">
+                              <ArrowDownCircle size={11} />+{m.stockIn}
+                            </span>
+                          ) : (
+                            <span className="text-muted text-xs">—</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          {m.stockOut > 0 ? (
+                            <span className="inline-flex items-center gap-1 text-xs font-mono font-semibold text-danger">
+                              <ArrowUpCircle size={11} />-{m.stockOut}
+                            </span>
+                          ) : (
+                            <span className="text-muted text-xs">—</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-xs font-mono font-bold text-right text-foreground whitespace-nowrap">{m.balance.toLocaleString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="border-t-2 border-primary/20 bg-primary/[0.03] text-xs font-bold">
+                      <td colSpan={5} className="px-4 py-3 text-foreground uppercase tracking-wide">Summary ({saTable.length} Records)</td>
+                      <td className="px-4 py-3 text-center text-success font-mono">+{saIn.toLocaleString()}</td>
+                      <td className="px-4 py-3 text-center text-danger font-mono">-{saOut.toLocaleString()}</td>
+                      <td className="px-4 py-3 text-right text-foreground font-mono">
+                        {saTable.length > 0 ? `${saTable[0].balance.toLocaleString()}` : "—"}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
             )}
+            {/* Mobile stacked cards */}
+            <div className="sm:hidden divide-y divide-border/50">
+              {saTable.map((m) => (
+                <div key={m.id} className="px-4 py-3.5">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium ${
+                      m.type === "production" ? "bg-primary/10 text-primary" :
+                      m.type === "marketing_agent" ? "bg-secondary/10 text-secondary" :
+                      "bg-muted/20 text-muted"
+                    }`}>
+                      {m.type === "production" ? "Production" : m.type === "marketing_agent" ? "Dispatch" : m.type}
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      {m.isReturn && (
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 uppercase tracking-wide">
+                          Return
+                        </span>
+                      )}
+                      <span className="text-[10px] font-mono text-muted">{fmtDate(m.date)}</span>
+                    </div>
+                  </div>
+                  <div className="text-xs font-medium text-foreground mb-1">{getProductName(m.productId)}</div>
+                  {m.agentId && <div className="text-[11px] text-muted mb-1">{getAgentName(m.agentId)}{m.location ? " · " + m.location : ""}</div>}
+                  <div className="flex items-center justify-between mt-2">
+                    <div className="flex gap-4">
+                      {m.stockIn > 0 && <span className="text-xs font-mono text-success">+{m.stockIn}</span>}
+                      {m.stockOut > 0 && <span className="text-xs font-mono text-danger">-{m.stockOut}</span>}
+                    </div>
+                    <span className="text-xs text-muted">Bal: <span className="font-mono text-foreground">{m.balance.toLocaleString()}</span></span>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
+
       </div>
     );
   }
+
+  /* ============================================================
+     MARKETING AGENT REPORT
+  ============================================================ */
   if (userRole === "marketing_agent") {
     const myAgentId = state.user?.id;
     const firstName = (state.user?.name || "").trim().split(" ")[0] || "there";
@@ -860,27 +1345,194 @@ export default function Report() {
       { id: "payments", label: "My Payments", icon: Banknote },
     ];
 
+    const getMarketingAgentReportData = (): { meta: ReportMeta; summary: string[]; sections: ReportSection[] } => {
+      const meta: ReportMeta = {
+        title:
+          maSection === "sales"
+            ? "Agent Sales & Loan Report"
+            : maSection === "clients"
+              ? "My Clients Report"
+              : "Agent Payments Report",
+        period: dateLabel[dateFilter],
+        scope: state.user?.name ?? "Marketing Agent",
+        generatedBy: state.user?.name ?? "Marketing Agent",
+      };
+
+      if (maSection === "sales") {
+        return {
+          meta,
+          summary: [
+            `Total Sales: ${fmt(salesTotal)}`,
+            `Boxes Sold: ${salesQtyTotal.toLocaleString()}`,
+            `Outstanding: ${fmt(salesOutstandingTotal)}`,
+            `Sales Count: ${salesInRange.length}`,
+          ],
+          sections: [
+            {
+              heading: "Sales Detail",
+              headers: ["Date", "Client", "Telephone", "District", "Product", "Qty", "Total", "Status", "Remaining"],
+              rows: salesInRange.map((r) => {
+                const client = clients.find((c) => c.id === r.clientId);
+                const remaining = r.paymentStatus === "loan" ? getReportRemaining(r) : 0;
+                return [
+                  fmtDate(r.date),
+                  client?.name ?? "—",
+                  client?.phone ?? "—",
+                  client?.district ?? "—",
+                  getProductName(r.productId),
+                  r.qty,
+                  fmt(r.totalPrice),
+                  r.paymentStatus === "paid" ? "Paid" : "Loan",
+                  remaining > 0 ? fmt(remaining) : "—",
+                ];
+              }),
+              numericColumns: [5, 6, 8],
+            },
+          ],
+        };
+      }
+
+      if (maSection === "clients") {
+        return {
+          meta,
+          summary: [
+            `Clients Handled: ${myClientsList.length}`,
+            `Total Outstanding: ${fmt(myClientsOutstandingTotal)}`,
+          ],
+          sections: [
+            {
+              heading: "My Clients",
+              headers: ["Client", "Telephone", "District", "Sector", "Center", "Outstanding"],
+              rows: myClientsWithLoans
+                .slice()
+                .sort((a, b) => b.outstanding - a.outstanding)
+                .map(({ client, outstanding }) => [
+                  client.name,
+                  client.phone,
+                  client.district,
+                  client.sector,
+                  client.center,
+                  outstanding > 0 ? fmt(outstanding) : "Settled",
+                ]),
+              numericColumns: [5],
+            },
+          ],
+        };
+      }
+
+      // payments
+      return {
+        meta,
+        summary: [
+          `Cash: ${fmt(payTotals.cash)}`,
+          `Bank: ${fmt(payTotals.bank)}`,
+          `Mobile Money: ${fmt(payTotals.telephone)}`,
+          `Depense: ${fmt(payTotals.expense)}`,
+        ],
+        sections: [
+          {
+            heading: "Payments & Expenses",
+            headers: ["Date", "Client / Expense", "Cash", "Bank", "Bank Name", "Mobile", "Receiver", "Depense"],
+            rows: payDayKeys.flatMap((date) => {
+              const dayPayments = payInRange.filter((p) => p.date === date);
+              const dayExpenses = expInRange.filter((e) => e.date === date);
+              const paymentRows = dayPayments.map((p) => {
+                const client = clients.find((c) => c.id === p.clientId);
+                return [
+                  fmtDate(date),
+                  client?.name ?? "—",
+                  p.mode === "cash" ? fmt(p.amount) : "—",
+                  p.mode === "bank" ? fmt(p.amount) : "—",
+                  p.mode === "bank" ? getBankName(p.bankId) : "—",
+                  p.mode === "telephone" ? fmt(p.amount) : "—",
+                  p.mode === "telephone" ? (p.receiverName || "—") : "—",
+                  "—",
+                ];
+              });
+              const expenseRows = dayExpenses.map((e) => [
+                fmtDate(date),
+                `(expense) ${e.name}`,
+                "—",
+                "—",
+                "—",
+                "—",
+                "—",
+                fmt(e.amount),
+              ]);
+              return [...paymentRows, ...expenseRows];
+            }),
+            numericColumns: [2, 3, 5, 7],
+          },
+        ],
+      };
+    };
+
+    const maFilenameBase = () => `soapflow-agent-${maSection}-report-${today()}`;
+
+    const handleMaExportPdf = () => {
+      const { meta, summary, sections } = getMarketingAgentReportData();
+      buildPdfReport(meta, summary, sections, `${maFilenameBase()}.pdf`);
+    };
+    const handleMaExportExcel = async () => {
+      setIsExportingExcel(true);
+      try {
+        const { meta, summary, sections } = getMarketingAgentReportData();
+        await buildExcelReport(meta, summary, sections, `${maFilenameBase()}.xlsx`);
+      } finally {
+        setIsExportingExcel(false);
+      }
+    };
+    const handleMaExportCsv = () => {
+      const { meta, summary, sections } = getMarketingAgentReportData();
+      buildCsvReport(meta, summary, sections, `${maFilenameBase()}.csv`);
+    };
+
     return (
       <div className="p-4 sm:p-6 lg:p-8 max-w-7xl">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 no-print">
-          <div>
-            <h1 className="text-xl sm:text-2xl font-bold text-foreground">
-              Hey {firstName}, here's your report 👋
-            </h1>
-            <p className="text-sm text-muted mt-1">
-              {dateLabel[dateFilter]} · everything you can print for your own records
-            </p>
+        <div className="relative overflow-hidden rounded-[var(--radius-lg)] bg-primary text-white p-5 sm:p-7 mb-6 shadow-lg">
+          <div className="pointer-events-none absolute -right-10 -top-14 w-48 h-48 rounded-full bg-white/10" />
+          <div className="pointer-events-none absolute -right-28 top-6 w-64 h-64 rounded-full bg-white/[0.06]" />
+          <div className="relative flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <div className="inline-flex items-center gap-1.5 bg-white/15 backdrop-blur-sm px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wider mb-2.5">
+                <Users size={11} />
+                Marketing Agent
+              </div>
+              <h1 className="text-xl sm:text-2xl font-bold">
+                Hey {firstName}, here's your report 👋
+              </h1>
+              <p className="text-xs sm:text-sm text-white/80 mt-1">
+                {dateLabel[dateFilter]} · export a clean copy for your own records
+              </p>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                onClick={handleMaExportCsv}
+                className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-white/15 hover:bg-white/25 text-white border border-white/20 rounded-[var(--radius)] transition-colors backdrop-blur-sm"
+              >
+                <Download size={15} />
+                <span>CSV</span>
+              </button>
+              <button
+                onClick={handleMaExportExcel}
+                disabled={isExportingExcel}
+                className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-white/15 hover:bg-white/25 text-white border border-white/20 rounded-[var(--radius)] transition-colors backdrop-blur-sm disabled:opacity-60"
+              >
+                <FileSpreadsheet size={15} />
+                <span>{isExportingExcel ? "Preparing..." : "Excel"}</span>
+              </button>
+              <button
+                onClick={handleMaExportPdf}
+                className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-white/15 hover:bg-white/25 text-white border border-white/20 rounded-[var(--radius)] transition-colors backdrop-blur-sm"
+              >
+                <Printer size={15} />
+                <span>PDF</span>
+              </button>
+            </div>
           </div>
-          <button
-            onClick={() => window.print()}
-            className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-primary text-white rounded-[var(--radius)] hover:bg-primary/90 transition-colors shadow-sm self-start sm:self-auto"
-          >
-            <Printer size={15} />
-            <span>Print / PDF</span>
-          </button>
         </div>
 
-        <div className="no-print mb-6 space-y-3">
+        <div className="mb-6 space-y-3">
           <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
             {MA_SECTIONS.map((s) => (
               <button
@@ -914,35 +1566,30 @@ export default function Report() {
           </div>
         </div>
 
-        <div className="hidden print:block mb-6 border-b border-border pb-4">
-          <div className="text-xl font-bold text-foreground uppercase tracking-wide">SoapFlow</div>
-          <div className="text-base font-semibold text-primary mt-0.5">
-            {maSection === "sales" ? "AGENT SALES & LOAN REPORT" : maSection === "clients" ? "MY CLIENTS REPORT" : "AGENT PAYMENTS REPORT"}
-          </div>
-          <div className="text-xs text-muted mt-1">
-            {state.user?.name} · {dateLabel[dateFilter]} · Generated: {new Date().toLocaleString()}
-          </div>
-        </div>
-
         {maSection === "sales" && (
           <>
-            <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 mb-6 no-print">
+            {/* 4 KPI cards in one row — muted professional colors */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
               <div className="bg-card border border-border rounded-[var(--radius-lg)] p-4 sm:p-5">
-                <div className="text-xs text-muted mb-1.5">Total Sales</div>
-                <div className="text-lg font-mono text-foreground">{fmt(salesTotal)}</div>
+                <div className="text-[11px] font-semibold text-muted uppercase tracking-wide mb-1">Total Sales</div>
+                <div className="text-lg font-mono font-bold text-foreground">{fmt(salesTotal)}</div>
               </div>
               <div className="bg-card border border-border rounded-[var(--radius-lg)] p-4 sm:p-5">
-                <div className="text-xs text-muted mb-1.5">Boxes Sold</div>
-                <div className="text-lg font-mono text-foreground">{salesQtyTotal.toLocaleString()}</div>
+                <div className="text-[11px] font-semibold text-muted uppercase tracking-wide mb-1">Boxes Sold</div>
+                <div className="text-lg font-mono font-bold text-foreground">{salesQtyTotal.toLocaleString()}</div>
               </div>
-              <div className="bg-secondary/10 border border-secondary/20 rounded-[var(--radius-lg)] p-4 sm:p-5 col-span-2 lg:col-span-1">
-                <div className="text-xs text-secondary mb-1.5">Outstanding</div>
-                <div className="text-lg font-mono text-secondary">{fmt(salesOutstandingTotal)}</div>
+              <div className="bg-card border-l-[3px] border-l-secondary/40 rounded-[var(--radius-lg)] p-4 sm:p-5">
+                <div className="text-[11px] font-semibold text-secondary uppercase tracking-wide mb-1">Outstanding</div>
+                <div className="text-lg font-mono font-bold text-secondary">{fmt(salesOutstandingTotal)}</div>
+              </div>
+              <div className="bg-card border-l-[3px] border-l-primary/40 rounded-[var(--radius-lg)] p-4 sm:p-5">
+                <div className="text-[11px] font-semibold text-primary uppercase tracking-wide mb-1">Sales Count</div>
+                <div className="text-lg font-mono font-bold text-primary">{salesInRange.length}</div>
               </div>
             </div>
 
             <div className="bg-card border border-border rounded-[var(--radius-lg)] overflow-hidden">
-              <div className="px-5 py-4 border-b border-border no-print">
+              <div className="px-5 py-4 border-b border-border flex items-center justify-between">
                 <h3 className="text-sm font-semibold text-foreground">
                   Sales Detail ({salesInRange.length} records)
                 </h3>
@@ -951,11 +1598,11 @@ export default function Report() {
                 <div className="py-16 text-center text-sm text-muted">No sales recorded for this period</div>
               ) : (
                 <div className="overflow-x-auto">
-                  <table className="w-full">
+                  <table className="w-full border-collapse">
                     <thead>
-                      <tr className="border-b border-border bg-background/50">
+                      <tr className="bg-primary/[0.07] border-b-2 border-primary/20">
                         {["Date", "Client", "Telephone", "District", "Product", "Qty", "Total", "Status", "Remaining"].map((h) => (
-                          <th key={h} className="text-left text-[10px] text-muted uppercase tracking-wide px-3 py-2.5 whitespace-nowrap">
+                          <th key={h} className="text-[11px] font-bold text-primary uppercase tracking-wider px-3 py-3.5 whitespace-nowrap text-left">
                             {h}
                           </th>
                         ))}
@@ -966,20 +1613,22 @@ export default function Report() {
                         const client = clients.find((c) => c.id === r.clientId);
                         const remaining = r.paymentStatus === "loan" ? getReportRemaining(r) : 0;
                         return (
-                          <tr key={r.id} className="border-b border-border/50">
-                            <td className="px-3 py-2.5 text-xs font-mono text-foreground whitespace-nowrap">{fmtDate(r.date)}</td>
-                            <td className="px-3 py-2.5 text-xs text-foreground whitespace-nowrap">{client?.name ?? "—"}</td>
-                            <td className="px-3 py-2.5 text-xs text-muted whitespace-nowrap">{client?.phone ?? "—"}</td>
-                            <td className="px-3 py-2.5 text-xs text-muted whitespace-nowrap">{client?.district ?? "—"}</td>
-                            <td className="px-3 py-2.5 text-xs text-foreground whitespace-nowrap">{getProductName(r.productId)}</td>
-                            <td className="px-3 py-2.5 text-xs font-mono text-muted">{r.qty}</td>
-                            <td className="px-3 py-2.5 text-xs font-mono text-foreground">{fmt(r.totalPrice)}</td>
-                            <td className="px-3 py-2.5">
-                              <span className={`inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded-full ${r.paymentStatus === "paid" ? "bg-success/10 text-success" : "bg-secondary/10 text-secondary"}`}>
+                          <tr key={r.id} className={`border-b border-border/40 ${r.id === salesInRange[salesInRange.length - 1].id ? "border-b-0" : ""}`}>
+                            <td className="px-3 py-3 text-xs font-mono text-muted whitespace-nowrap">{fmtDate(r.date)}</td>
+                            <td className="px-3 py-3 text-xs font-semibold text-foreground whitespace-nowrap">{client?.name ?? "—"}</td>
+                            <td className="px-3 py-3 text-xs text-muted whitespace-nowrap">{client?.phone ?? "—"}</td>
+                            <td className="px-3 py-3 text-xs text-muted whitespace-nowrap">{client?.district ?? "—"}</td>
+                            <td className="px-3 py-3 text-xs text-foreground whitespace-nowrap">{getProductName(r.productId)}</td>
+                            <td className="px-3 py-3 text-xs font-mono text-muted">{r.qty}</td>
+                            <td className="px-3 py-3 text-xs font-mono font-semibold text-foreground">{fmt(r.totalPrice)}</td>
+                            <td className="px-3 py-3">
+                              <span className={`inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded ${
+                                r.paymentStatus === "paid" ? "bg-success/10 text-success" : "bg-secondary/10 text-secondary"
+                              }`}>
                                 {r.paymentStatus === "paid" ? "Paid" : "Loan"}
                               </span>
                             </td>
-                            <td className="px-3 py-2.5 text-xs font-mono text-secondary">{remaining > 0 ? fmt(remaining) : "—"}</td>
+                            <td className="px-3 py-3 text-xs font-mono text-secondary">{remaining > 0 ? fmt(remaining) : "—"}</td>
                           </tr>
                         );
                       })}
@@ -993,7 +1642,7 @@ export default function Report() {
 
         {maSection === "clients" && (
           <div className="bg-card border border-border rounded-[var(--radius-lg)] overflow-hidden">
-            <div className="px-5 py-4 border-b border-border flex items-center justify-between no-print">
+            <div className="px-5 py-4 border-b border-border flex items-center justify-between">
               <h3 className="text-sm font-semibold text-foreground">
                 {myClientsList.length} client{myClientsList.length !== 1 ? "s" : ""} handled
               </h3>
@@ -1003,11 +1652,11 @@ export default function Report() {
               <div className="py-16 text-center text-sm text-muted">No clients assigned yet</div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full">
+                <table className="w-full border-collapse">
                   <thead>
-                    <tr className="border-b border-border bg-background/50">
+                    <tr className="bg-primary/[0.07] border-b-2 border-primary/20">
                       {["Client", "Telephone", "District", "Sector", "Center", "Outstanding"].map((h) => (
-                        <th key={h} className="text-left text-[10px] text-muted uppercase tracking-wide px-3 py-2.5 whitespace-nowrap">
+                        <th key={h} className="text-[11px] font-bold text-primary uppercase tracking-wider px-3 py-3.5 whitespace-nowrap text-left">
                           {h}
                         </th>
                       ))}
@@ -1016,14 +1665,14 @@ export default function Report() {
                   <tbody>
                     {myClientsWithLoans
                       .sort((a, b) => b.outstanding - a.outstanding)
-                      .map(({ client, outstanding }) => (
-                        <tr key={client.id} className="border-b border-border/50">
-                          <td className="px-3 py-2.5 text-xs font-medium text-foreground whitespace-nowrap">{client.name}</td>
-                          <td className="px-3 py-2.5 text-xs text-muted whitespace-nowrap">{client.phone}</td>
-                          <td className="px-3 py-2.5 text-xs text-muted whitespace-nowrap">{client.district}</td>
-                          <td className="px-3 py-2.5 text-xs text-muted whitespace-nowrap">{client.sector}</td>
-                          <td className="px-3 py-2.5 text-xs text-muted whitespace-nowrap">{client.center}</td>
-                          <td className="px-3 py-2.5 text-xs font-mono text-secondary">
+                      .map(({ client, outstanding }, i) => (
+                        <tr key={client.id} className={`border-b border-border/40 ${i % 2 === 1 ? "bg-background/50" : ""}`}>
+                          <td className="px-3 py-3 text-xs font-medium text-foreground whitespace-nowrap">{client.name}</td>
+                          <td className="px-3 py-3 text-xs text-muted whitespace-nowrap">{client.phone}</td>
+                          <td className="px-3 py-3 text-xs text-muted whitespace-nowrap">{client.district}</td>
+                          <td className="px-3 py-3 text-xs text-muted whitespace-nowrap">{client.sector}</td>
+                          <td className="px-3 py-3 text-xs text-muted whitespace-nowrap">{client.center}</td>
+                          <td className="px-3 py-3 text-xs font-mono text-secondary">
                             {outstanding > 0 ? fmt(outstanding) : <span className="text-success">Settled</span>}
                           </td>
                         </tr>
@@ -1037,7 +1686,7 @@ export default function Report() {
 
         {maSection === "payments" && (
           <>
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6 no-print">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
               {[
                 { label: "Cash", value: payTotals.cash },
                 { label: "Bank", value: payTotals.bank },
@@ -1045,8 +1694,8 @@ export default function Report() {
                 { label: "Depense", value: payTotals.expense },
               ].map((t) => (
                 <div key={t.label} className="bg-card border border-border rounded-[var(--radius-lg)] p-4">
-                  <div className="text-xs text-muted mb-1.5">{t.label}</div>
-                  <div className="text-base font-mono text-foreground">{fmt(t.value)}</div>
+                  <div className="text-[11px] font-semibold text-muted uppercase tracking-wide mb-1">{t.label}</div>
+                  <div className="text-base font-mono font-bold text-foreground">{fmt(t.value)}</div>
                 </div>
               ))}
             </div>
@@ -1056,11 +1705,11 @@ export default function Report() {
                 <div className="py-16 text-center text-sm text-muted">No payments or expenses for this period</div>
               ) : (
                 <div className="overflow-x-auto">
-                  <table className="w-full min-w-[780px]">
+                  <table className="w-full border-collapse min-w-[780px]">
                     <thead>
-                      <tr className="border-b border-border bg-background/50">
+                      <tr className="bg-primary/[0.07] border-b-2 border-primary/20">
                         {["Client / Expense", "Cash", "Bank", "Bank Name", "Mobile", "Receiver", "Depense", "Amount"].map((h) => (
-                          <th key={h} className="text-left text-[10px] text-muted uppercase tracking-wide px-3 py-2.5 whitespace-nowrap">
+                          <th key={h} className="text-[11px] font-bold text-primary uppercase tracking-wider px-3 py-3.5 whitespace-nowrap text-left">
                             {h}
                           </th>
                         ))}
@@ -1077,7 +1726,7 @@ export default function Report() {
                         return (
                           <FragmentDay key={date}>
                             <tr className="bg-accent/30">
-                              <td colSpan={8} className="px-3 py-1.5 text-xs font-semibold text-foreground">{fmtDate(date)}</td>
+                              <td colSpan={8} className="px-3 py-2 text-xs font-bold text-foreground">{fmtDate(date)}</td>
                             </tr>
                             {dayPayments.map((p) => {
                               const client = clients.find((c) => c.id === p.clientId);
@@ -1101,7 +1750,7 @@ export default function Report() {
                                 <td className="px-3 py-2 text-xs text-muted">—</td>
                                 <td className="px-3 py-2 text-xs text-muted">—</td>
                                 <td className="px-3 py-2 text-xs text-muted">—</td>
-                                <td className="px-3 py-2 text-xs text-muted">—</td>
+                                <td className="px-3 py-2 text-xs text-muted">&gt;</td>
                                 <td className="px-3 py-2 text-xs text-foreground">{e.name}</td>
                                 <td className="px-3 py-2 text-xs font-mono text-danger">{fmt(e.amount)}</td>
                               </tr>
@@ -1130,9 +1779,12 @@ export default function Report() {
     );
   }
 
+  /* ============================================================
+     MAIN ADMIN REPORT — The primary report view
+  ============================================================ */
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-7xl">
-      <div className="flex items-center justify-between mb-6 lg:mb-8">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 lg:mb-8">
         <div>
           <h1 className="text-xl font-bold text-foreground">Report</h1>
           <p className="text-sm text-muted mt-0.5">
@@ -1140,29 +1792,37 @@ export default function Report() {
             {scopeLabel ? ` · ${scopeLabel}` : ""}
           </p>
         </div>
-        <div className="flex items-center gap-2 no-print">
-          <button
-            onClick={() => window.print()}
-            className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-card border border-border text-foreground rounded-[var(--radius)] hover:bg-accent/40 transition-colors shadow-sm"
-          >
-            <Printer size={15} />
-            <span className="hidden sm:inline">Print / PDF</span>
-          </button>
+        <div className="flex items-center gap-2 flex-wrap">
           <button
             onClick={handleExportCsv}
-            className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-primary text-white rounded-[var(--radius)] hover:bg-primary/90 transition-colors shadow-sm"
+            className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-card border border-border text-foreground rounded-[var(--radius)] hover:bg-accent/40 transition-colors shadow-sm"
           >
             <Download size={15} />
-            <span className="hidden sm:inline">Export Excel</span>
+            <span className="hidden sm:inline">CSV</span>
+          </button>
+          <button
+            onClick={handleExportExcel}
+            disabled={isExportingExcel}
+            className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-card border border-border text-foreground rounded-[var(--radius)] hover:bg-accent/40 transition-colors shadow-sm disabled:opacity-60"
+          >
+            <FileSpreadsheet size={15} />
+            <span className="hidden sm:inline">{isExportingExcel ? "Preparing..." : "Excel"}</span>
+          </button>
+          <button
+            onClick={handleExportPdf}
+            className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-primary text-white rounded-[var(--radius)] hover:bg-primary/90 transition-colors shadow-sm"
+          >
+            <Printer size={15} />
+            <span className="hidden sm:inline">PDF</span>
           </button>
         </div>
       </div>
 
       {hiddenCount > 0 && (
-        <div className="no-print flex items-center justify-between gap-2 bg-amber-50 border border-amber-200 px-4 py-2.5 rounded-[var(--radius)] mb-4 shadow-sm">
+        <div className="flex items-center justify-between gap-2 bg-amber-50 border border-amber-200 px-4 py-2.5 rounded-[var(--radius)] mb-4 shadow-sm">
           <div className="flex items-center gap-2 text-xs font-semibold text-amber-800">
             <Eye size={14} />
-            <span>{hiddenCount} Section{hiddenCount > 1 ? "s" : ""} Hidden (Excluded from PDF & Export)</span>
+            <span>{hiddenCount} Section{hiddenCount > 1 ? "s" : ""} Hidden from screen view</span>
           </div>
           <button
             onClick={resetHiddenSections}
@@ -1173,15 +1833,16 @@ export default function Report() {
         </div>
       )}
 
-      {/* Filter controls panel — strictly hidden during print/export */}
-      <div className="no-print mb-6 space-y-4">
+      {/* Filter controls panel */}
+      <div className="mb-6 space-y-4">
         {/* Report type tabs */}
         <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
           {REPORT_TYPES.map((t) => (
             <button
               key={t.id}
               onClick={() => setReportType(t.id)}
-              className={`flex items-center gap-2 px-4 py-2.5 text-sm font-semibold rounded-[var(--radius)] transition-colors whitespace-nowrap flex-shrink-0 ${reportType === t.id
+              className={`flex items-center gap-2 px-4 py-2.5 text-sm font-semibold rounded-[var(--radius)] transition-colors whitespace-nowrap flex-shrink-0 ${
+                reportType === t.id
                   ? "bg-primary text-white"
                   : "bg-card border border-border text-muted hover:text-foreground"
                 }`}
@@ -1200,7 +1861,8 @@ export default function Report() {
                 <button
                   key={f}
                   onClick={() => setDateFilter(f)}
-                  className={`px-4 py-2 text-sm font-medium rounded-[var(--radius)] transition-colors whitespace-nowrap flex-shrink-0 ${dateFilter === f
+                  className={`px-4 py-2 text-sm font-medium rounded-[var(--radius)] transition-colors whitespace-nowrap flex-shrink-0 ${
+                    dateFilter === f
                       ? "bg-primary/10 text-primary border border-primary/30"
                       : "bg-card border border-border text-muted hover:text-foreground"
                     }`}
@@ -1308,70 +1970,66 @@ export default function Report() {
       {/* ============ SALES ============ */}
       {reportType === "sales" && (
         <>
-          {/* Sales KPIs Grid */}
+          {/* Sales KPIs Grid — 4 in one row, muted professional look */}
           {!isHidden("sales-kpis") && (
             <div className="relative mb-8">
               <button
                 onClick={() => toggleSection("sales-kpis")}
-                title="Hide KPI cards from report"
-                className="no-print absolute -top-3 right-2 p-1 bg-card border border-border text-muted hover:text-danger hover:bg-danger/10 rounded-full transition-colors shadow-xs z-10"
+                title="Hide KPI cards"
+                className="absolute -top-3 right-2 p-1 bg-card border border-border text-muted hover:text-danger hover:bg-danger/10 rounded-full transition-colors shadow-xs z-10"
               >
                 <Minus size={12} />
               </button>
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
                 {[
                   {
                     label: "Total Revenue",
                     value: fmt(salesRevenue),
                     icon: DollarSign,
-                    color: "primary",
+                    color: "#2E9E8F",
                   },
                   {
                     label: "Boxes Sold",
                     value: salesQty.toLocaleString(),
                     icon: Package,
-                    color: "success",
+                    color: "#3FA66B",
                   },
                   {
                     label: "Outstanding",
                     value: fmt(salesOutstanding),
                     icon: CreditCard,
-                    color: "secondary",
+                    color: "#D99A3D",
                   },
                   {
                     label: "Active Agents",
                     value: salesByAgent.length.toString(),
                     icon: Users,
-                    color: "foreground",
+                    color: "#6B7B78",
                   },
-                ].map((kpi) => {
-                  const colorMap: Record<string, string> = {
-                    primary: "#2E9E8F",
-                    success: "#3FA66B",
-                    secondary: "#D99A3D",
-                    foreground: "#1B2321",
-                  };
-                  return (
-                    <div
-                      key={kpi.label}
-                      className="bg-card border border-border rounded-[var(--radius-lg)] p-5 hover:shadow-md hover:-translate-y-0.5 transition-all duration-200"
-                    >
+                ].map((kpi) => (
+                  <div
+                    key={kpi.label}
+                    className="bg-card border border-border rounded-[var(--radius-lg)] p-4 sm:p-5 hover:shadow-md transition-all duration-200"
+                  >
+                    <div className="flex items-center gap-3">
                       <div
-                        className="w-9 h-9 rounded-[var(--radius)] flex items-center justify-center mb-3"
-                        style={{ background: colorMap[kpi.color] + "18" }}
+                        className="w-10 h-10 rounded-[var(--radius)] flex items-center justify-center flex-shrink-0"
+                        style={{ background: kpi.color + "12" }}
                       >
                         <kpi.icon
-                          size={17}
-                          style={{ color: colorMap[kpi.color] }}
+                          size={18}
+                          style={{ color: kpi.color }}
                         />
                       </div>
-                      <div className="text-xl font-bold text-foreground mb-0.5">
-                        {kpi.value}
+                      <div>
+                        <div className="text-[11px] font-semibold text-muted uppercase tracking-wide">{kpi.label}</div>
+                        <div className="text-lg sm:text-xl font-bold leading-tight" style={{ color: kpi.color }}>
+                          {kpi.value}
+                        </div>
                       </div>
-                      <div className="text-xs text-muted">{kpi.label}</div>
                     </div>
-                  );
-                })}
+                  </div>
+                ))}
               </div>
             </div>
           )}
@@ -1394,8 +2052,8 @@ export default function Report() {
                       </div>
                       <button
                         onClick={() => toggleSection("sales-trend")}
-                        title="Hide chart from report"
-                        className="no-print p-1 text-muted hover:text-danger hover:bg-danger/10 rounded transition-colors"
+                        title="Hide chart"
+                        className="p-1 text-muted hover:text-danger hover:bg-danger/10 rounded transition-colors"
                       >
                         <Minus size={14} />
                       </button>
@@ -1465,8 +2123,8 @@ export default function Report() {
                       </div>
                       <button
                         onClick={() => toggleSection("sales-pie")}
-                        title="Hide chart from report"
-                        className="no-print p-1 text-muted hover:text-danger hover:bg-danger/10 rounded transition-colors"
+                        title="Hide chart"
+                        className="p-1 text-muted hover:text-danger hover:bg-danger/10 rounded transition-colors"
                       >
                         <Minus size={14} />
                       </button>
@@ -1545,15 +2203,15 @@ export default function Report() {
                     status:
                       r.paymentStatus === "paid"
                         ? {
-                          label: "✓ Paid",
-                          className:
-                            "bg-success/10 text-success border border-success/20",
-                        }
+                            label: "✓ Paid",
+                            className:
+                              "bg-success/10 text-success border border-success/20",
+                          }
                         : {
-                          label: "⏳ Loan",
-                          className:
-                            "bg-secondary/10 text-secondary border border-secondary/20",
-                        },
+                            label: "⏳ Loan",
+                            className:
+                              "bg-secondary/10 text-secondary border border-secondary/20",
+                          },
                     mobileTitle: getName(r.agentId, agents),
                     mobileSub: `→ ${getName(r.clientId, clients)} · ${getName(r.productId, products)}`,
                     mobileLeft: `${r.qty} boxes`,
@@ -1568,60 +2226,57 @@ export default function Report() {
       {/* ============ STOCK MOVEMENT ============ */}
       {reportType === "stock" && (
         <>
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+          {/* 4 KPI cards — one row, muted */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-8">
             {[
               {
-                label: "Stock In (period)",
+                label: "Stock In",
                 value: `${stockIn.toLocaleString()} boxes`,
                 icon: ArrowDownCircle,
-                color: "success",
+                color: "#3FA66B",
               },
               {
-                label: "Stock Out (period)",
+                label: "Stock Out",
                 value: `${stockOut.toLocaleString()} boxes`,
                 icon: ArrowUpCircle,
-                color: "secondary",
+                color: "#E05C5C",
               },
               {
                 label: "Net Change",
                 value: `${stockNet >= 0 ? "+" : ""}${stockNet.toLocaleString()}`,
                 icon: Package,
-                color: "primary",
+                color: "#2E9E8F",
               },
               {
                 label: "Current Balance",
                 value: `${currentBalance.toLocaleString()} boxes`,
                 icon: BarChart3,
-                color: "foreground",
+                color: "#6B7B78",
               },
-            ].map((kpi) => {
-              const colorMap: Record<string, string> = {
-                primary: "#2E9E8F",
-                success: "#3FA66B",
-                secondary: "#D99A3D",
-                foreground: "#1B2321",
-              };
-              return (
-                <div
-                  key={kpi.label}
-                  className="bg-card border border-border rounded-[var(--radius-lg)] p-5 hover:shadow-md hover:-translate-y-0.5 transition-all duration-200"
-                >
+            ].map((kpi) => (
+              <div
+                key={kpi.label}
+                className="bg-card border border-border rounded-[var(--radius-lg)] p-4 sm:p-5 hover:shadow-md transition-all duration-200"
+              >
+                <div className="flex items-center gap-3">
                   <div
-                    className="w-9 h-9 rounded-[var(--radius)] flex items-center justify-center mb-3"
-                    style={{ background: colorMap[kpi.color] + "18" }}
+                    className="w-10 h-10 rounded-[var(--radius)] flex items-center justify-center flex-shrink-0"
+                    style={{ background: kpi.color + "12" }}
                   >
                     <kpi.icon
-                      size={17}
-                      style={{ color: colorMap[kpi.color] }}
+                      size={18}
+                      style={{ color: kpi.color }}
                     />
                   </div>
-                  <div className="text-xl font-bold text-foreground mb-0.5">
-                    {kpi.value}
+                  <div>
+                    <div className="text-[11px] font-semibold text-muted uppercase tracking-wide">{kpi.label}</div>
+                    <div className="text-base sm:text-lg font-bold leading-tight" style={{ color: kpi.color }}>
+                      {kpi.value}
+                    </div>
                   </div>
-                  <div className="text-xs text-muted">{kpi.label}</div>
                 </div>
-              );
-            })}
+              </div>
+            ))}
           </div>
 
           {stockFiltered.length === 0 ? (
@@ -1685,45 +2340,13 @@ export default function Report() {
                 </ResponsiveContainer>
               </div>
 
-              {/* ── Movement Record Card with Top-Right Export & Print Buttons ── */}
               <div className="bg-card border border-border rounded-[var(--radius-lg)] overflow-hidden shadow-sm">
-                {/* Header with Title + Top-Right Buttons */}
+                {/* Header with Title */}
                 <div className="px-5 py-4 border-b border-border flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="flex items-center gap-2">
                     <Package size={16} className="text-primary flex-shrink-0" />
                     <h3 className="text-sm font-bold text-foreground">Movement Record</h3>
                     <span className="text-xs text-muted">({stockFiltered.length} records)</span>
-                  </div>
-
-                  {/* Top-Right Action Buttons */}
-                  <div className="flex items-center gap-2 no-print self-end sm:self-auto">
-                    <button
-                      onClick={handleExportStockCSV}
-                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-background border border-border rounded-[var(--radius)] hover:bg-accent/40 text-foreground transition-colors"
-                    >
-                      <Download size={13} />
-                      Export Excel
-                    </button>
-                    <button
-                      onClick={() => window.print()}
-                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-primary text-white rounded-[var(--radius)] hover:bg-primary/90 transition-colors"
-                    >
-                      <Printer size={13} />
-                      Print / PDF
-                    </button>
-                  </div>
-                </div>
-
-                {/* Printable Company Header */}
-                <div className="hidden print:block p-5 border-b border-border">
-                  <div className="text-xl font-bold text-foreground uppercase tracking-wide">
-                    {COMPANY_NAME}
-                  </div>
-                  <div className="text-sm font-semibold text-primary mt-0.5">
-                    STOCK MOVEMENT RECORD REPORT
-                  </div>
-                  <div className="text-xs text-muted mt-1">
-                    Filter Period: {dateLabel[dateFilter]} · Generated: {new Date().toLocaleString()}
                   </div>
                 </div>
 
@@ -1731,15 +2354,15 @@ export default function Report() {
                 <div className="hidden sm:block overflow-x-auto">
                   <table className="w-full border-collapse">
                     <thead>
-                      <tr className="border-b border-border bg-background/50">
-                        <th className="text-left text-xs font-semibold text-muted uppercase tracking-wider px-4 py-3 whitespace-nowrap">Date</th>
-                        <th className="text-left text-xs font-semibold text-muted uppercase tracking-wider px-4 py-3 whitespace-nowrap">Products Name</th>
-                        <th className="text-left text-xs font-semibold text-muted uppercase tracking-wider px-4 py-3 whitespace-nowrap">Type</th>
-                        <th className="text-left text-xs font-semibold text-muted uppercase tracking-wider px-4 py-3 whitespace-nowrap">Agent</th>
-                        <th className="text-left text-xs font-semibold text-muted uppercase tracking-wider px-4 py-3 whitespace-nowrap">Location</th>
-                        <th className="text-left text-xs font-semibold text-muted uppercase tracking-wider px-4 py-3 whitespace-nowrap">Stock In</th>
-                        <th className="text-left text-xs font-semibold text-muted uppercase tracking-wider px-4 py-3 whitespace-nowrap">Stock Out</th>
-                        <th className="text-right text-xs font-semibold text-muted uppercase tracking-wider px-4 py-3 whitespace-nowrap">Balance</th>
+                      <tr className="bg-primary/[0.07] border-b-2 border-primary/20">
+                        <th className="text-[11px] font-bold text-primary uppercase tracking-wider px-4 py-3.5 whitespace-nowrap text-left">Date</th>
+                        <th className="text-[11px] font-bold text-primary uppercase tracking-wider px-4 py-3.5 whitespace-nowrap text-left">Products Name</th>
+                        <th className="text-[11px] font-bold text-primary uppercase tracking-wider px-4 py-3.5 whitespace-nowrap text-left">Type</th>
+                        <th className="text-[11px] font-bold text-primary uppercase tracking-wider px-4 py-3.5 whitespace-nowrap text-left">Agent</th>
+                        <th className="text-[11px] font-bold text-primary uppercase tracking-wider px-4 py-3.5 whitespace-nowrap text-left">Location</th>
+                        <th className="text-[11px] font-bold text-primary uppercase tracking-wider px-4 py-3.5 whitespace-nowrap text-center">Stock In</th>
+                        <th className="text-[11px] font-bold text-primary uppercase tracking-wider px-4 py-3.5 whitespace-nowrap text-center">Stock Out</th>
+                        <th className="text-[11px] font-bold text-primary uppercase tracking-wider px-4 py-3.5 whitespace-nowrap text-right">Balance</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1749,20 +2372,16 @@ export default function Report() {
                         .map((m, i) => (
                           <tr
                             key={m.id}
-                            className={`border-b border-border/50 hover:bg-accent/40 transition-colors ${i % 2 === 1 ? "bg-background/40" : ""
-                              }`}
+                            className={`border-b border-border/40 transition-colors ${
+                              i % 2 === 1 ? "bg-background/50" : ""
+                            } ${i === stockFiltered.length - 1 ? "border-b-0" : ""}`}
                           >
-                            {/* 1. Date */}
-                            <td className="px-4 py-3 text-xs font-mono text-foreground whitespace-nowrap">
+                            <td className="px-4 py-3 text-xs font-mono text-muted whitespace-nowrap">
                               {fmtDate(m.date)}
                             </td>
-
-                            {/* 2. Products Name */}
-                            <td className="px-4 py-3 text-xs font-bold text-foreground whitespace-nowrap">
+                            <td className="px-4 py-3 text-xs font-semibold text-foreground whitespace-nowrap">
                               {getName(m.productId, products)}
                             </td>
-
-                            {/* 3. Type */}
                             <td className="px-4 py-3 text-xs text-muted whitespace-nowrap">
                               {m.type === "production"
                                 ? "Production"
@@ -1770,43 +2389,35 @@ export default function Report() {
                                   ? "Agent Dispatch"
                                   : "Other"}
                             </td>
-
-                            {/* 4. Agent */}
                             <td className="px-4 py-3 text-xs font-medium text-foreground whitespace-nowrap">
                               {m.agentId ? getName(m.agentId, agents) : "—"}
                             </td>
-
-                            {/* 5. Location */}
                             <td className="px-4 py-3 text-xs text-muted whitespace-nowrap">
                               {m.location || "—"}
                             </td>
-
-                            {/* 6. Stock In (With Return Tag if agent return) */}
-                            <td className="px-4 py-3 text-xs font-mono font-medium">
+                            <td className="px-4 py-3 text-center">
                               {m.stockIn > 0 ? (
-                                <div className="inline-flex items-center gap-1.5 text-success">
-                                  <span>+{m.stockIn} boxes</span>
+                                <div className="inline-flex items-center gap-1.5 text-success text-xs font-mono font-semibold">
+                                  <ArrowDownCircle size={11} />+{m.stockIn}
                                   {m.isReturn && (
-                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 uppercase tracking-wide">
+                                    <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 uppercase tracking-wide">
                                       Return
                                     </span>
                                   )}
                                 </div>
                               ) : (
-                                <span className="text-muted">—</span>
+                                <span className="text-muted text-xs">—</span>
                               )}
                             </td>
-
-                            {/* 7. Stock Out */}
-                            <td className="px-4 py-3 text-xs font-mono font-medium">
+                            <td className="px-4 py-3 text-center">
                               {m.stockOut > 0 ? (
-                                <span className="text-danger">-{m.stockOut} boxes</span>
+                                <span className="inline-flex items-center gap-1 text-danger text-xs font-mono font-semibold">
+                                  <ArrowUpCircle size={11} />-{m.stockOut}
+                                </span>
                               ) : (
-                                <span className="text-muted">—</span>
+                                <span className="text-muted text-xs">—</span>
                               )}
                             </td>
-
-                            {/* 8. Balance */}
                             <td className="px-4 py-3 text-xs font-mono font-bold text-right text-foreground whitespace-nowrap">
                               {m.balance.toLocaleString()} boxes
                             </td>
@@ -1814,15 +2425,15 @@ export default function Report() {
                         ))}
                     </tbody>
                     <tfoot>
-                      <tr className="border-t-2 border-border bg-accent/50 font-bold text-xs">
-                        <td colSpan={5} className="px-4 py-3 text-foreground">
-                          TOTAL SUMMARY ({stockFiltered.length} RECORDS)
+                      <tr className="border-t-2 border-primary/20 bg-primary/[0.03] font-bold text-xs">
+                        <td colSpan={5} className="px-4 py-3 text-foreground uppercase tracking-wide">
+                          Summary ({stockFiltered.length} Records)
                         </td>
-                        <td className="px-4 py-3 text-success font-mono">
-                          +{stockFiltered.reduce((s, m) => s + m.stockIn, 0).toLocaleString()} boxes
+                        <td className="px-4 py-3 text-center text-success font-mono">
+                          +{stockFiltered.reduce((s, m) => s + m.stockIn, 0).toLocaleString()}
                         </td>
-                        <td className="px-4 py-3 text-danger font-mono">
-                          -{stockFiltered.reduce((s, m) => s + m.stockOut, 0).toLocaleString()} boxes
+                        <td className="px-4 py-3 text-center text-danger font-mono">
+                          -{stockFiltered.reduce((s, m) => s + m.stockOut, 0).toLocaleString()}
                         </td>
                         <td className="px-4 py-3 text-right text-foreground font-mono">
                           {stockFiltered.length > 0
@@ -1835,7 +2446,7 @@ export default function Report() {
                 </div>
 
                 {/* Mobile View Stacked Cards */}
-                <div className="sm:hidden divide-y divide-border/50 no-print">
+                <div className="sm:hidden divide-y divide-border/50">
                   {stockFiltered
                     .slice()
                     .sort((a, b) => b.date.localeCompare(a.date))
@@ -1884,60 +2495,57 @@ export default function Report() {
       {/* ============ LOANS ============ */}
       {reportType === "loans" && (
         <>
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+          {/* 4 KPI cards — one row, muted */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-8">
             {[
               {
-                label: "Loans Issued (period)",
+                label: "Loans Issued",
                 value: fmt(loansIssued),
                 icon: CreditCard,
-                color: "secondary",
+                color: "#D99A3D",
               },
               {
-                label: "Payments Received (period)",
+                label: "Payments Received",
                 value: fmt(loanPaymentsReceived),
                 icon: DollarSign,
-                color: "success",
+                color: "#3FA66B",
               },
               {
-                label: "Net Change (period)",
+                label: "Net Change",
                 value: fmt(loansIssued - loanPaymentsReceived),
                 icon: BarChart3,
-                color: "primary",
+                color: "#2E9E8F",
               },
               {
-                label: "Clients w/ Activity",
+                label: "Active Clients",
                 value: loansByClient.length.toString(),
                 icon: Users,
-                color: "foreground",
+                color: "#6B7B78",
               },
-            ].map((kpi) => {
-              const colorMap: Record<string, string> = {
-                primary: "#2E9E8F",
-                success: "#3FA66B",
-                secondary: "#D99A3D",
-                foreground: "#1B2321",
-              };
-              return (
-                <div
-                  key={kpi.label}
-                  className="bg-card border border-border rounded-[var(--radius-lg)] p-5 hover:shadow-md hover:-translate-y-0.5 transition-all duration-200"
-                >
+            ].map((kpi) => (
+              <div
+                key={kpi.label}
+                className="bg-card border border-border rounded-[var(--radius-lg)] p-4 sm:p-5 hover:shadow-md transition-all duration-200"
+              >
+                <div className="flex items-center gap-3">
                   <div
-                    className="w-9 h-9 rounded-[var(--radius)] flex items-center justify-center mb-3"
-                    style={{ background: colorMap[kpi.color] + "18" }}
+                    className="w-10 h-10 rounded-[var(--radius)] flex items-center justify-center flex-shrink-0"
+                    style={{ background: kpi.color + "12" }}
                   >
                     <kpi.icon
-                      size={17}
-                      style={{ color: colorMap[kpi.color] }}
+                      size={18}
+                      style={{ color: kpi.color }}
                     />
                   </div>
-                  <div className="text-xl font-bold text-foreground mb-0.5">
-                    {kpi.value}
+                  <div>
+                    <div className="text-[11px] font-semibold text-muted uppercase tracking-wide">{kpi.label}</div>
+                    <div className="text-lg font-bold leading-tight" style={{ color: kpi.color }}>
+                      {kpi.value}
+                    </div>
                   </div>
-                  <div className="text-xs text-muted">{kpi.label}</div>
                 </div>
-              );
-            })}
+              </div>
+            ))}
           </div>
 
           {loansByClient.length === 0 ? (
@@ -1991,12 +2599,13 @@ export default function Report() {
       {/* ============ PAYMENTS ============ */}
       {reportType === "payments" && (
         <>
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-            <div className="col-span-2 bg-primary/10 border border-primary/20 rounded-[var(--radius-lg)] p-5">
-              <div className="text-xs text-primary font-semibold uppercase tracking-wide mb-2">
+          {/* 4 KPI cards — one row, muted */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-8">
+            <div className="col-span-2 bg-primary/5 border border-primary/15 rounded-[var(--radius-lg)] p-4 sm:p-5">
+              <div className="text-[11px] font-semibold text-primary uppercase tracking-wide mb-1">
                 Total Received
               </div>
-              <div className="text-xl sm:text-2xl text-primary font-mono">
+              <div className="text-xl sm:text-2xl text-primary font-mono font-bold">
                 {fmt(paymentsTotal)}
               </div>
             </div>
@@ -2007,12 +2616,12 @@ export default function Report() {
               return (
                 <div
                   key={mode}
-                  className="bg-card border border-border rounded-[var(--radius-lg)] p-5"
+                  className="bg-card border border-border rounded-[var(--radius-lg)] p-4 sm:p-5"
                 >
-                  <div className="text-xs text-muted capitalize mb-2">
+                  <div className="text-[11px] font-semibold text-muted uppercase tracking-wide mb-1 capitalize">
                     {mode === "telephone" ? "Mobile Money" : mode}
                   </div>
-                  <div className="text-base sm:text-lg text-foreground font-mono">
+                  <div className="text-base sm:text-lg text-foreground font-mono font-bold">
                     {fmt(modeTotal)}
                   </div>
                 </div>
@@ -2162,6 +2771,7 @@ export default function Report() {
 function FragmentDay({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
+
 function EmptyState() {
   return (
     <div className="bg-card border border-border rounded-[var(--radius-lg)] flex flex-col items-center justify-center py-16">
@@ -2198,8 +2808,8 @@ function RankedBarCard({
         {onHide && (
           <button
             onClick={onHide}
-            title="Hide section from report"
-            className="no-print p-1 text-muted hover:text-danger hover:bg-danger/10 rounded transition-colors"
+            title="Hide section"
+            className="p-1 text-muted hover:text-danger hover:bg-danger/10 rounded transition-colors"
           >
             <Minus size={14} />
           </button>
@@ -2267,29 +2877,30 @@ function DetailTable({
     <div className="bg-card border border-border rounded-[var(--radius-lg)] overflow-hidden">
       <div className="px-5 py-4 border-b border-border flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <Icon size={16} className="text-muted flex-shrink-0" />
+          <Icon size={16} className="text-primary flex-shrink-0" />
           <h3 className="text-sm font-semibold text-foreground">{title}</h3>
           <span className="text-xs text-muted">({count} records)</span>
         </div>
         {onHide && (
           <button
             onClick={onHide}
-            title="Hide table from report"
-            className="no-print p-1 text-muted hover:text-danger hover:bg-danger/10 rounded transition-colors"
+            title="Hide table"
+            className="p-1 text-muted hover:text-danger hover:bg-danger/10 rounded transition-colors"
           >
             <Minus size={14} />
           </button>
         )}
       </div>
 
+      {/* Desktop & Tablet — professional table */}
       <div className="hidden sm:block overflow-x-auto">
-        <table className="w-full">
+        <table className="w-full border-collapse">
           <thead>
-            <tr className="border-b border-border bg-background/50">
+            <tr className="bg-primary/[0.07] border-b-2 border-primary/20">
               {headers.map((h) => (
                 <th
                   key={h}
-                  className="text-left text-xs font-semibold text-muted uppercase tracking-wide px-4 py-3 whitespace-nowrap"
+                  className="text-[11px] font-bold text-primary uppercase tracking-wider px-4 py-3.5 whitespace-nowrap text-left"
                 >
                   {h}
                 </th>
@@ -2300,15 +2911,18 @@ function DetailTable({
             {rows.map((row, i) => (
               <tr
                 key={row.key}
-                className={`border-b border-border/50 hover:bg-accent/40 transition-colors ${i === rows.length - 1 ? "border-b-0" : ""}`}
+                className={`border-b border-border/40 transition-colors ${
+                  i % 2 === 1 ? "bg-background/50" : ""
+                } ${i === rows.length - 1 ? "border-b-0" : ""}`}
               >
                 {row.cells.map((cell, ci) => {
                   const isLast = ci === row.cells.length - 1;
+                  const isAmount = cell.includes(",") || cell.startsWith("RWF");
                   if (isLast && row.status) {
                     return (
                       <td key={ci} className="px-4 py-3">
                         <span
-                          className={`inline-flex items-center text-[11px] font-semibold px-2.5 py-1 rounded-full whitespace-nowrap ${row.status.className}`}
+                          className={`inline-flex items-center text-[10px] font-semibold px-2.5 py-1 rounded whitespace-nowrap ${row.status.className}`}
                         >
                           {row.status.label}
                         </span>
@@ -2318,7 +2932,11 @@ function DetailTable({
                   return (
                     <td
                       key={ci}
-                      className="px-4 py-3 text-sm text-foreground whitespace-nowrap"
+                      className={`px-4 py-3 whitespace-nowrap ${
+                        isAmount || ci >= 2
+                          ? "text-xs font-mono font-semibold text-foreground"
+                          : "text-xs text-foreground"
+                      }`}
                     >
                       {cell}
                     </td>
@@ -2330,6 +2948,7 @@ function DetailTable({
         </table>
       </div>
 
+      {/* Mobile — Stacked cards */}
       <div className="sm:hidden divide-y divide-border/50">
         {rows.map((row) => (
           <div key={row.key} className="px-4 py-3.5">
@@ -2339,7 +2958,7 @@ function DetailTable({
               </span>
               {row.status ? (
                 <span
-                  className={`inline-flex items-center text-[11px] font-semibold px-2.5 py-1 rounded-full flex-shrink-0 ${row.status.className}`}
+                  className={`inline-flex items-center text-[10px] font-semibold px-2.5 py-1 rounded flex-shrink-0 ${row.status.className}`}
                 >
                   {row.status.label}
                 </span>

@@ -117,7 +117,7 @@ export function Layout({ page, setPage, user, onLogout, children }: Props) {
             </div>
             <div className="whitespace-nowrap">
               <div className="text-white font-bold text-sm leading-tight">
-                SoapFlow
+                Kangaroo Bigger
               </div>
               <div className="text-white/40 text-[10px] leading-tight">
                 {/* Manufacturing & Distribution */}

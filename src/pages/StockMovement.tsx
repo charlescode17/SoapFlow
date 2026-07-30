@@ -129,8 +129,59 @@ export default function StockMovement() {
       return;
     }
 
-    setSaving(true);
     const isStockIn = commonForm.type === "production" || commonForm.isReturn;
+
+    // 🚨 Stock availability check — only applies to stock-out movements
+    if (!isStockIn) {
+      const overStockLines: string[] = [];
+
+      for (const item of validItems) {
+        const qty = parseFloat(item.qty);
+        const prod = products.find((p) => p.id === item.productId);
+        const piecesPerBox = prod?.piecesPerBox ?? prod?.qtyPerBox ?? null;
+
+        const boxesQty =
+          item.unit === "piece"
+            ? piecesPerBox && piecesPerBox > 0
+              ? parseFloat((qty / piecesPerBox).toFixed(3))
+              : qty
+            : qty;
+
+        const available = lastBalance(state.stockMovements, item.productId);
+
+        if (boxesQty > available) {
+          overStockLines.push(
+            `<li style="margin-bottom:4px;"><b>${prod?.name ?? "Unknown Product"}</b>: requesting <b>${boxesQty}</b> boxes, only <b>${available}</b> in stock</li>`,
+          );
+        }
+      }
+
+      if (overStockLines.length > 0) {
+        const result = await Swal.fire({
+          icon: "warning",
+          title: "Insufficient Stock",
+          html: `
+            <div style="text-align:left; font-size:13px;">
+              <p>The following product(s) exceed what's currently in stock:</p>
+              <ul style="margin:10px 0; padding-left:18px;">
+                ${overStockLines.join("")}
+              </ul>
+              <p>Proceeding will push the balance <b>negative</b>. Do you want to continue anyway?</p>
+            </div>
+          `,
+          showCancelButton: true,
+          confirmButtonText: "Proceed Anyway",
+          cancelButtonText: "Cancel",
+          confirmButtonColor: "#dc2626",
+        });
+
+        if (!result.isConfirmed) {
+          return;
+        }
+      }
+    }
+
+    setSaving(true);
 
     try {
       for (const item of validItems) {
