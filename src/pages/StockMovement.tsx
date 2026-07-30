@@ -378,13 +378,13 @@ export default function StockMovement() {
             <Download size={14} />
             Export Excel
           </button> */}
-          <button
+          {/* <button
             onClick={() => window.print()}
             className="flex items-center gap-1.5 px-3.5 py-2 text-xs bg-card border border-border text-foreground rounded-[var(--radius)] hover:bg-accent/40 transition-colors"
           >
             <Printer size={14} />
             Print / PDF
-          </button>
+          </button> */}
           {canEdit && (
             <button
               onClick={() => setShowForm((v) => !v)}

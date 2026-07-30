@@ -34,7 +34,7 @@ export default function Payments() {
 
   /* ── Payment form state ───────────────────────────────────── */
   const [clientId, setClientId] = useState("");
-  const [reportId, setReportId] = useState("");
+  const [selectedReportIds, setSelectedReportIds] = useState<string[]>([]);
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState(today());
   const [mode, setMode] = useState<PaymentMode>("cash");
@@ -51,6 +51,14 @@ export default function Payments() {
       .sort((a, b) => a.report.date.localeCompare(b.report.date));
   }, [clientId, loanReports, state.payments]);
 
+  const selectedTotal = useMemo(
+    () =>
+      unpaidReports
+        .filter((r) => selectedReportIds.includes(r.report.id))
+        .reduce((s, r) => s + r.remaining, 0),
+    [unpaidReports, selectedReportIds],
+  );
+
   const getProductName = (id: string) =>
     state.products.find((p) => p.id === id)?.name ?? "—";
   const getClientName = (id: string) =>
@@ -62,19 +70,28 @@ export default function Payments() {
 
   const selectClient = (id: string) => {
     setClientId(id);
-    setReportId("");
+    setSelectedReportIds([]);
     setAmount("");
   };
 
-  const selectReport = (id: string) => {
-    setReportId(id);
-    const found = unpaidReports.find((r) => r.report.id === id);
-    setAmount(found ? String(found.remaining) : "");
+  const toggleReportSelection = (id: string) => {
+    setSelectedReportIds((prev) => {
+      const next = prev.includes(id) ? prev.filter((rid) => rid !== id) : [...prev, id];
+      const newTotal = unpaidReports
+        .filter((r) => next.includes(r.report.id))
+        .reduce((s, r) => s + r.remaining, 0);
+      setAmount((prevAmount) => {
+        const numPrev = Number(prevAmount) || 0;
+        if (next.length === 0) return "";
+        return numPrev > 0 && numPrev <= newTotal ? prevAmount : String(newTotal);
+      });
+      return next;
+    });
   };
 
   const resetPaymentForm = () => {
     setClientId("");
-    setReportId("");
+    setSelectedReportIds([]);
     setAmount("");
     setDate(today());
     setMode("cash");
@@ -83,26 +100,44 @@ export default function Payments() {
   };
 
   const handleConfirmPayment = async () => {
-    if (!clientId || !reportId || !amount || !state.user || !effectiveAgentId) return;
+    if (!clientId || selectedReportIds.length === 0 || !amount || !state.user || !effectiveAgentId) return;
     const numAmount = Number(amount);
     if (numAmount <= 0) return;
 
-    setSaving(true);
-    const { data, error } = await supabase
-      .from("payments")
-      .insert({
-        client_id: clientId,
-        agent_id: effectiveAgentId,
-        report_id: reportId,
-        date,
-        amount: numAmount,
-        mode,
-        bank_id: mode === "bank" ? bankId || null : null,
-        receiver_name: mode === "telephone" ? receiverName || null : null,
-        created_by: state.user.name,
+    // Never let a payment exceed what's actually owed on the selected dates.
+    const targets = unpaidReports
+      .filter((r) => selectedReportIds.includes(r.report.id))
+      .sort((a, b) => a.report.date.localeCompare(b.report.date)); // oldest first
+    const maxPayable = targets.reduce((s, r) => s + r.remaining, 0);
+    const amountToApply = Math.min(numAmount, maxPayable);
+    if (amountToApply <= 0) return;
+
+    // Split the payment across the selected loans, oldest date first, so
+    // one payment can clear several dates at once.
+    let remainingToAllocate = amountToApply;
+    const allocations = targets
+      .map((r) => {
+        if (remainingToAllocate <= 0) return null;
+        const portion = Math.min(r.remaining, remainingToAllocate);
+        remainingToAllocate -= portion;
+        return { reportId: r.report.id, portion };
       })
-      .select()
-      .single();
+      .filter((a): a is { reportId: string; portion: number } => a !== null && a.portion > 0);
+
+    setSaving(true);
+    const payloads = allocations.map((a) => ({
+      client_id: clientId,
+      agent_id: effectiveAgentId,
+      report_id: a.reportId,
+      date,
+      amount: a.portion,
+      mode,
+      bank_id: mode === "bank" ? bankId || null : null,
+      receiver_name: mode === "telephone" ? receiverName || null : null,
+      created_by: state.user.name,
+    }));
+
+    const { data, error } = await supabase.from("payments").insert(payloads).select();
     setSaving(false);
 
     if (error) {
@@ -110,24 +145,26 @@ export default function Payments() {
       return;
     }
 
-    dispatch({
-      type: "ADD_PAYMENT",
-      payload: {
-        id: data.id,
-        clientId: data.client_id,
-        agentId: data.agent_id,
-        reportId: data.report_id,
-        date: data.date,
-        amount: Number(data.amount),
-        mode: data.mode,
-        bankId: data.bank_id ?? undefined,
-        receiverName: data.receiver_name ?? undefined,
-      },
-    });
+    (data ?? []).forEach((d) =>
+      dispatch({
+        type: "ADD_PAYMENT",
+        payload: {
+          id: d.id,
+          clientId: d.client_id,
+          agentId: d.agent_id,
+          reportId: d.report_id,
+          date: d.date,
+          amount: Number(d.amount),
+          mode: d.mode,
+          bankId: d.bank_id ?? undefined,
+          receiverName: d.receiver_name ?? undefined,
+        },
+      }),
+    );
 
     Swal.fire({
       icon: "success",
-      title: "Payment recorded",
+      title: allocations.length > 1 ? `Payment recorded across ${allocations.length} dates` : "Payment recorded",
       timer: 1400,
       showConfirmButton: false,
     });
@@ -261,30 +298,37 @@ export default function Payments() {
                 {clientId && (
                   <div>
                     <label className="text-xs text-muted uppercase tracking-wide block mb-1.5">
-                      Unpaid Date
+                      Unpaid Dates — select one or more
                     </label>
                     {unpaidReports.length === 0 ? (
                       <div className="text-xs text-success bg-success/10 border border-success/20 rounded-[var(--radius-sm)] px-3 py-2">
                         This client has no outstanding balance
                       </div>
                     ) : (
-                      <select
-                        value={reportId}
-                        onChange={(e) => selectReport(e.target.value)}
-                        className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] bg-white focus:outline-none focus:ring-2 focus:ring-primary/30"
-                      >
-                        <option value="">Select unpaid date</option>
+                      <div className="space-y-1.5 max-h-52 overflow-y-auto border border-border rounded-[var(--radius)] p-2">
                         {unpaidReports.map(({ report, remaining }) => (
-                          <option key={report.id} value={report.id}>
-                            {fmtDate(report.date)} — {getProductName(report.productId)} — {fmt(remaining)} remaining
-                          </option>
+                          <label
+                            key={report.id}
+                            className="flex items-center gap-2.5 text-sm px-2 py-2 rounded-[var(--radius-sm)] hover:bg-accent/40 cursor-pointer"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={selectedReportIds.includes(report.id)}
+                              onChange={() => toggleReportSelection(report.id)}
+                              className="accent-primary"
+                            />
+                            <span className="flex-1 text-foreground">
+                              {fmtDate(report.date)} — {getProductName(report.productId)}
+                            </span>
+                            <span className="font-mono text-secondary">{fmt(remaining)}</span>
+                          </label>
                         ))}
-                      </select>
+                      </div>
                     )}
                   </div>
                 )}
 
-                {reportId && (
+                {selectedReportIds.length > 0 && (
                   <>
                     <div className="grid grid-cols-2 gap-4">
                       <div>
@@ -292,10 +336,20 @@ export default function Payments() {
                         <input
                           type="number"
                           min="1"
+                          max={selectedTotal}
                           value={amount}
-                          onChange={(e) => setAmount(e.target.value)}
+                          onChange={(e) => {
+                            const v = Number(e.target.value) || 0;
+                            setAmount(v > selectedTotal ? String(selectedTotal) : e.target.value);
+                          }}
                           className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30"
                         />
+                        <p className="text-[11px] text-muted mt-1">
+                          Max {fmt(selectedTotal)} across {selectedReportIds.length} selected date{selectedReportIds.length === 1 ? "" : "s"}
+                        </p>
+                        <p className="text-[11px] text-muted mt-1">
+                          Max {fmt(selectedTotal)} across {selectedReportIds.length} selected date{selectedReportIds.length === 1 ? "" : "s"}
+                        </p>
                       </div>
                       <div>
                         <label className="text-xs text-muted uppercase tracking-wide block mb-1.5">Payment Date</label>

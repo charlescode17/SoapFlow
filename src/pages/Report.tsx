@@ -55,7 +55,7 @@ import { normalizeRole, type PaymentMode } from "../lib/types";
 // 🏢 COMPANY NAME — Edit the text below to change the company name on PDF & Excel reports
 // Just replace "SOAPFLOW" with your company name and it will appear on all printed reports
 // ============================================================================
-const COMPANY_NAME = "SOAPFLOW";
+const COMPANY_NAME = "Kangaroo Bigger";
 
 type DateFilter = "daily" | "weekly" | "monthly" | "annual" | "custom";
 type ReportType = "sales" | "stock" | "loans" | "payments";
@@ -127,8 +127,9 @@ function buildPdfReport(
   summary: string[],
   sections: ReportSection[],
   filename: string,
+  orientation: "portrait" | "landscape" = "portrait",
 ) {
-  const doc = new jsPDF({ unit: "pt", format: "a4" }) as JsPdfWithAutoTable;
+  const doc = new jsPDF({ unit: "pt", format: "a4", orientation }) as JsPdfWithAutoTable;
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
   const margin = 40;
@@ -202,18 +203,21 @@ function buildPdfReport(
       body: section.rows,
       margin: { left: margin, right: margin, bottom: 56 },
       theme: "grid",
+      tableWidth: "auto",
       styles: {
-        fontSize: 8.3,
-        cellPadding: 5.5,
+        fontSize: orientation === "landscape" ? 9.5 : 8.3,
+        cellPadding: orientation === "landscape" ? 7 : 5.5,
         textColor: PDF_COLORS.text,
         lineColor: PDF_COLORS.border,
         lineWidth: 0.5,
+        overflow: "linebreak",
       },
       headStyles: {
         fillColor: PDF_COLORS.primary,
         textColor: [255, 255, 255],
         fontStyle: "bold",
         halign: "left",
+        fontSize: orientation === "landscape" ? 10 : 8.5,
       },
       alternateRowStyles: { fillColor: PDF_COLORS.altRow },
       columnStyles: pdfColumnStyles(section.headers, section.numericColumns),
@@ -1211,7 +1215,7 @@ export default function Report() {
                         <td className="px-4 py-3 text-xs text-muted">{m.location ?? "—"}</td>
                         <td className="px-4 py-3 text-center">
                           {m.stockIn > 0 ? (
-                            <span className="inline-flex items-center gap-1 text-xs font-mono font-semibold text-success">
+                            <span className="inline-flex items-center gap-1 text-xs font-mono text-success">
                               <ArrowDownCircle size={11} />+{m.stockIn}
                             </span>
                           ) : (
@@ -1220,23 +1224,23 @@ export default function Report() {
                         </td>
                         <td className="px-4 py-3 text-center">
                           {m.stockOut > 0 ? (
-                            <span className="inline-flex items-center gap-1 text-xs font-mono font-semibold text-danger">
+                            <span className="inline-flex items-center gap-1 text-xs font-mono text-danger">
                               <ArrowUpCircle size={11} />-{m.stockOut}
                             </span>
                           ) : (
                             <span className="text-muted text-xs">—</span>
                           )}
                         </td>
-                        <td className="px-4 py-3 text-xs font-mono font-bold text-right text-foreground whitespace-nowrap">{m.balance.toLocaleString()}</td>
+                        <td className="px-4 py-3 text-xs font-bold text-right text-foreground whitespace-nowrap">{m.balance.toLocaleString()}</td>
                       </tr>
                     ))}
                   </tbody>
                   <tfoot>
                     <tr className="border-t-2 border-primary/20 bg-primary/[0.03] text-xs font-bold">
                       <td colSpan={5} className="px-4 py-3 text-foreground uppercase tracking-wide">Summary ({saTable.length} Records)</td>
-                      <td className="px-4 py-3 text-center text-success font-mono">+{saIn.toLocaleString()}</td>
-                      <td className="px-4 py-3 text-center text-danger font-mono">-{saOut.toLocaleString()}</td>
-                      <td className="px-4 py-3 text-right text-foreground font-mono">
+                      <td className="px-4 py-3 text-center text-success">+{saIn.toLocaleString()}</td>
+                      <td className="px-4 py-3 text-center text-danger">-{saOut.toLocaleString()}</td>
+                      <td className="px-4 py-3 text-right text-foreground">
                         {saTable.length > 0 ? `${saTable[0].balance.toLocaleString()}` : "—"}
                       </td>
                     </tr>
@@ -1302,10 +1306,92 @@ export default function Report() {
       products.find((p) => p.id === id)?.name ?? "—";
     const getBankName = (id?: string) =>
       id ? state.banks.find((b) => b.id === id)?.name ?? "—" : "—";
+    const getReportDate = (reportId?: string) =>
+      reportId ? myReports.find((r) => r.id === reportId)?.date : undefined;
+
+    type SalesLoanRow = {
+      key: string;
+      date: string;
+      clientName: string;
+      phone: string;
+      district: string;
+      center: string;
+      product: string;
+      qty: number;
+      unitPrice: number;
+      totalPrice: number;
+      paymentDate: string | null;
+      amountPaid: number | null;
+      method: string | null;
+      remaining: number;
+    };
+
+    const buildSalesLoanRows = (reports: typeof myReports): SalesLoanRow[] => {
+      const rows: SalesLoanRow[] = [];
+      [...reports].sort((a, b) => a.date.localeCompare(b.date)).forEach((r) => {
+        const client = clients.find((c) => c.id === r.clientId);
+        const reportPayments = state.payments
+          .filter((p) => p.reportId === r.id)
+          .sort((a, b) => a.date.localeCompare(b.date));
+        const methodLabel = (p: (typeof reportPayments)[number]) =>
+          p.mode === "telephone"
+            ? `Mobile Money — ${p.receiverName || "—"}`
+            : p.mode === "bank"
+              ? "Bank"
+              : "Cash";
+
+        if (reportPayments.length === 0) {
+          rows.push({
+            key: r.id,
+            date: r.date,
+            clientName: client?.name ?? r.customerName ?? "Walk-in customer",
+            phone: client?.phone ?? "—",
+            district: client?.district ?? "—",
+            center: client?.center ?? "—",
+            product: getProductName(r.productId),
+            qty: r.qty,
+            unitPrice: r.unitPrice,
+            totalPrice: r.totalPrice,
+            paymentDate: null,
+            amountPaid: null,
+            method: null,
+            remaining: r.totalPrice,
+          });
+          return;
+        }
+
+        let cumulativePaid = 0;
+        reportPayments.forEach((p) => {
+          cumulativePaid += p.amount;
+          rows.push({
+            key: `${r.id}-${p.id}`,
+            date: r.date,
+            clientName: client?.name ?? r.customerName ?? "Walk-in customer",
+            phone: client?.phone ?? "—",
+            district: client?.district ?? "—",
+            center: client?.center ?? "—",
+            product: getProductName(r.productId),
+            qty: r.qty,
+            unitPrice: r.unitPrice,
+            totalPrice: r.totalPrice,
+            paymentDate: p.date,
+            amountPaid: p.amount,
+            method: methodLabel(p),
+            remaining: Math.max(0, r.totalPrice - cumulativePaid),
+          });
+        });
+      });
+      return rows.sort((a, b) => {
+        const d = a.date.localeCompare(b.date);
+        return d !== 0 ? d : (a.paymentDate ?? "").localeCompare(b.paymentDate ?? "");
+      });
+    };
+
 
     const salesInRange = myReports
       .filter((r) => inDateRange(r.date))
-      .sort((a, b) => b.date.localeCompare(a.date));
+      .sort((a, b) => a.date.localeCompare(b.date)); // ascending
+    const salesLoanRows = buildSalesLoanRows(salesInRange);
     const salesTotal = salesInRange.reduce((s, r) => s + r.totalPrice, 0);
     const salesQtyTotal = salesInRange.reduce((s, r) => s + r.qty, 0);
     const salesOutstandingTotal = salesInRange
@@ -1360,7 +1446,7 @@ export default function Report() {
 
       if (maSection === "sales") {
         return {
-          meta,
+          meta: { ...meta, title: "Sales & Loan Report" },
           summary: [
             `Total Sales: ${fmt(salesTotal)}`,
             `Boxes Sold: ${salesQtyTotal.toLocaleString()}`,
@@ -1369,24 +1455,28 @@ export default function Report() {
           ],
           sections: [
             {
-              heading: "Sales Detail",
-              headers: ["Date", "Client", "Telephone", "District", "Product", "Qty", "Total", "Status", "Remaining"],
-              rows: salesInRange.map((r) => {
-                const client = clients.find((c) => c.id === r.clientId);
-                const remaining = r.paymentStatus === "loan" ? getReportRemaining(r) : 0;
-                return [
-                  fmtDate(r.date),
-                  client?.name ?? "—",
-                  client?.phone ?? "—",
-                  client?.district ?? "—",
-                  getProductName(r.productId),
-                  r.qty,
-                  fmt(r.totalPrice),
-                  r.paymentStatus === "paid" ? "Paid" : "Loan",
-                  remaining > 0 ? fmt(remaining) : "—",
-                ];
-              }),
-              numericColumns: [5, 6, 8],
+              heading: "Sales & Loan Detail",
+              headers: [
+                "Date", "Client", "Telephone", "District", "Center", "Product",
+                "Qty", "Unit Price", "Total Price",
+                "Payment Date", "Amount Paid", "Method", "Remaining",
+              ],
+              rows: salesLoanRows.map((row) => [
+                fmtDate(row.date),
+                row.clientName,
+                row.phone,
+                row.district,
+                row.center,
+                row.product,
+                row.qty,
+                fmt(row.unitPrice),
+                fmt(row.totalPrice),
+                row.paymentDate ? fmtDate(row.paymentDate) : "—",
+                row.amountPaid != null ? fmt(row.amountPaid) : "—",
+                row.method ?? "—",
+                row.remaining > 0 ? fmt(row.remaining) : "Settled",
+              ]),
+              numericColumns: [6, 7, 8, 10, 12],
             },
           ],
         };
@@ -1420,7 +1510,55 @@ export default function Report() {
         };
       }
 
-      // payments
+      // payments — grouped into Cash / Bank / Mobile Money / Depenses per
+      // day, with a subtotal row closing out each day.
+      const sortedDayKeys = [...payDayKeys].sort((a, b) => a.localeCompare(b));
+      const exportRows: (string | number)[][] = [];
+      sortedDayKeys.forEach((date) => {
+        const dayPayments = payInRange.filter((p) => p.date === date);
+        const dayExpenses = expInRange.filter((e) => e.date === date);
+        const cash = dayPayments.filter((p) => p.mode === "cash");
+        const bank = dayPayments.filter((p) => p.mode === "bank");
+        const tel = dayPayments.filter((p) => p.mode === "telephone");
+
+        exportRows.push([fmtDate(date), "— DAY —", "", "", ""]);
+
+        if (cash.length) {
+          exportRows.push(["", "CASH", "", "", ""]);
+          cash.forEach((p) => {
+            const client = clients.find((c) => c.id === p.clientId);
+            const loanDate = getReportDate(p.reportId);
+            exportRows.push(["", client?.name ?? "—", loanDate ? fmtDate(loanDate) : "—", fmt(p.amount), "—"]);
+          });
+        }
+        if (bank.length) {
+          exportRows.push(["", "BANK", "", "", ""]);
+          bank.forEach((p) => {
+            const client = clients.find((c) => c.id === p.clientId);
+            const loanDate = getReportDate(p.reportId);
+            exportRows.push(["", client?.name ?? "—", loanDate ? fmtDate(loanDate) : "—", fmt(p.amount), getBankName(p.bankId)]);
+          });
+        }
+        if (tel.length) {
+          exportRows.push(["", "MOBILE MONEY", "", "", ""]);
+          tel.forEach((p) => {
+            const client = clients.find((c) => c.id === p.clientId);
+            const loanDate = getReportDate(p.reportId);
+            exportRows.push(["", client?.name ?? "—", loanDate ? fmtDate(loanDate) : "—", fmt(p.amount), p.receiverName || "—"]);
+          });
+        }
+        if (dayExpenses.length) {
+          exportRows.push(["", "DEPENSES", "", "", ""]);
+          dayExpenses.forEach((e) => exportRows.push(["", e.name, "—", fmt(e.amount), "—"]));
+        }
+
+        const dCash = cash.reduce((s, p) => s + p.amount, 0);
+        const dBank = bank.reduce((s, p) => s + p.amount, 0);
+        const dTel = tel.reduce((s, p) => s + p.amount, 0);
+        const dExp = dayExpenses.reduce((s, e) => s + e.amount, 0);
+        exportRows.push(["", `SUBTOTAL — ${fmtDate(date)}`, "", fmt(dCash + dBank + dTel), `Depenses: ${fmt(dExp)}`]);
+      });
+
       return {
         meta,
         summary: [
@@ -1432,36 +1570,9 @@ export default function Report() {
         sections: [
           {
             heading: "Payments & Expenses",
-            headers: ["Date", "Client / Expense", "Cash", "Bank", "Bank Name", "Mobile", "Receiver", "Depense"],
-            rows: payDayKeys.flatMap((date) => {
-              const dayPayments = payInRange.filter((p) => p.date === date);
-              const dayExpenses = expInRange.filter((e) => e.date === date);
-              const paymentRows = dayPayments.map((p) => {
-                const client = clients.find((c) => c.id === p.clientId);
-                return [
-                  fmtDate(date),
-                  client?.name ?? "—",
-                  p.mode === "cash" ? fmt(p.amount) : "—",
-                  p.mode === "bank" ? fmt(p.amount) : "—",
-                  p.mode === "bank" ? getBankName(p.bankId) : "—",
-                  p.mode === "telephone" ? fmt(p.amount) : "—",
-                  p.mode === "telephone" ? (p.receiverName || "—") : "—",
-                  "—",
-                ];
-              });
-              const expenseRows = dayExpenses.map((e) => [
-                fmtDate(date),
-                `(expense) ${e.name}`,
-                "—",
-                "—",
-                "—",
-                "—",
-                "—",
-                fmt(e.amount),
-              ]);
-              return [...paymentRows, ...expenseRows];
-            }),
-            numericColumns: [2, 3, 5, 7],
+            headers: ["Date", "Client / Category", "Loan Date", "Amount", "Detail (Bank / Receiver)"],
+            rows: exportRows,
+            numericColumns: [3],
           },
         ],
       };
@@ -1471,7 +1582,8 @@ export default function Report() {
 
     const handleMaExportPdf = () => {
       const { meta, summary, sections } = getMarketingAgentReportData();
-      buildPdfReport(meta, summary, sections, `${maFilenameBase()}.pdf`);
+      const orientation = maSection === "sales" ? "landscape" : "portrait";
+      buildPdfReport(meta, summary, sections, `${maFilenameBase()}.pdf`, orientation);
     };
     const handleMaExportExcel = async () => {
       setIsExportingExcel(true);
@@ -1572,36 +1684,40 @@ export default function Report() {
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
               <div className="bg-card border border-border rounded-[var(--radius-lg)] p-4 sm:p-5">
                 <div className="text-[11px] font-semibold text-muted uppercase tracking-wide mb-1">Total Sales</div>
-                <div className="text-lg font-mono font-bold text-foreground">{fmt(salesTotal)}</div>
+                <div className="text-lg font-bold text-foreground">{fmt(salesTotal)}</div>
               </div>
               <div className="bg-card border border-border rounded-[var(--radius-lg)] p-4 sm:p-5">
                 <div className="text-[11px] font-semibold text-muted uppercase tracking-wide mb-1">Boxes Sold</div>
-                <div className="text-lg font-mono font-bold text-foreground">{salesQtyTotal.toLocaleString()}</div>
+                <div className="text-lg font-bold text-foreground">{salesQtyTotal.toLocaleString()}</div>
               </div>
               <div className="bg-card border-l-[3px] border-l-secondary/40 rounded-[var(--radius-lg)] p-4 sm:p-5">
                 <div className="text-[11px] font-semibold text-secondary uppercase tracking-wide mb-1">Outstanding</div>
-                <div className="text-lg font-mono font-bold text-secondary">{fmt(salesOutstandingTotal)}</div>
+                <div className="text-lg font-bold text-secondary">{fmt(salesOutstandingTotal)}</div>
               </div>
               <div className="bg-card border-l-[3px] border-l-primary/40 rounded-[var(--radius-lg)] p-4 sm:p-5">
                 <div className="text-[11px] font-semibold text-primary uppercase tracking-wide mb-1">Sales Count</div>
-                <div className="text-lg font-mono font-bold text-primary">{salesInRange.length}</div>
+                <div className="text-lg font-bold text-primary">{salesInRange.length}</div>
               </div>
             </div>
 
             <div className="bg-card border border-border rounded-[var(--radius-lg)] overflow-hidden">
               <div className="px-5 py-4 border-b border-border flex items-center justify-between">
                 <h3 className="text-sm font-semibold text-foreground">
-                  Sales Detail ({salesInRange.length} records)
+                  Sales & Loan Detail ({salesLoanRows.length} records)
                 </h3>
               </div>
-              {salesInRange.length === 0 ? (
+              {salesLoanRows.length === 0 ? (
                 <div className="py-16 text-center text-sm text-muted">No sales recorded for this period</div>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full border-collapse">
                     <thead>
                       <tr className="bg-primary/[0.07] border-b-2 border-primary/20">
-                        {["Date", "Client", "Telephone", "District", "Product", "Qty", "Total", "Status", "Remaining"].map((h) => (
+                        {[
+                          "Date", "Client", "Telephone", "District", "Center", "Product",
+                          "Qty", "Unit Price", "Total Price",
+                          "Payment Date", "Amount Paid", "Method", "Remaining",
+                        ].map((h) => (
                           <th key={h} className="text-[11px] font-bold text-primary uppercase tracking-wider px-3 py-3.5 whitespace-nowrap text-left">
                             {h}
                           </th>
@@ -1609,29 +1725,25 @@ export default function Report() {
                       </tr>
                     </thead>
                     <tbody>
-                      {salesInRange.map((r) => {
-                        const client = clients.find((c) => c.id === r.clientId);
-                        const remaining = r.paymentStatus === "loan" ? getReportRemaining(r) : 0;
-                        return (
-                          <tr key={r.id} className={`border-b border-border/40 ${r.id === salesInRange[salesInRange.length - 1].id ? "border-b-0" : ""}`}>
-                            <td className="px-3 py-3 text-xs font-mono text-muted whitespace-nowrap">{fmtDate(r.date)}</td>
-                            <td className="px-3 py-3 text-xs font-semibold text-foreground whitespace-nowrap">{client?.name ?? "—"}</td>
-                            <td className="px-3 py-3 text-xs text-muted whitespace-nowrap">{client?.phone ?? "—"}</td>
-                            <td className="px-3 py-3 text-xs text-muted whitespace-nowrap">{client?.district ?? "—"}</td>
-                            <td className="px-3 py-3 text-xs text-foreground whitespace-nowrap">{getProductName(r.productId)}</td>
-                            <td className="px-3 py-3 text-xs font-mono text-muted">{r.qty}</td>
-                            <td className="px-3 py-3 text-xs font-mono font-semibold text-foreground">{fmt(r.totalPrice)}</td>
-                            <td className="px-3 py-3">
-                              <span className={`inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded ${
-                                r.paymentStatus === "paid" ? "bg-success/10 text-success" : "bg-secondary/10 text-secondary"
-                              }`}>
-                                {r.paymentStatus === "paid" ? "Paid" : "Loan"}
-                              </span>
-                            </td>
-                            <td className="px-3 py-3 text-xs font-mono text-secondary">{remaining > 0 ? fmt(remaining) : "—"}</td>
-                          </tr>
-                        );
-                      })}
+                      {salesLoanRows.map((row, i) => (
+                        <tr key={row.key} className={`border-b border-border/40 ${i % 2 === 1 ? "bg-background/40" : ""} ${i === salesLoanRows.length - 1 ? "border-b-0" : ""}`}>
+                          <td className="px-3 py-3 text-xs font-mono text-muted whitespace-nowrap">{fmtDate(row.date)}</td>
+                          <td className="px-3 py-3 text-xs font-semibold text-foreground whitespace-nowrap">{row.clientName}</td>
+                          <td className="px-3 py-3 text-xs text-muted whitespace-nowrap">{row.phone}</td>
+                          <td className="px-3 py-3 text-xs text-muted whitespace-nowrap">{row.district}</td>
+                          <td className="px-3 py-3 text-xs text-muted whitespace-nowrap">{row.center}</td>
+                          <td className="px-3 py-3 text-xs text-foreground whitespace-nowrap">{row.product}</td>
+                          <td className="px-3 py-3 text-xs font-mono text-muted">{row.qty}</td>
+                          <td className="px-3 py-3 text-xs font-mono text-muted">{fmt(row.unitPrice)}</td>
+                          <td className="px-3 py-3 text-xs font-semibold text-foreground">{fmt(row.totalPrice)}</td>
+                          <td className="px-3 py-3 text-xs font-mono text-muted whitespace-nowrap">{row.paymentDate ? fmtDate(row.paymentDate) : "—"}</td>
+                          <td className="px-3 py-3 text-xs font-mono text-success">{row.amountPaid != null ? fmt(row.amountPaid) : "—"}</td>
+                          <td className="px-3 py-3 text-xs text-foreground whitespace-nowrap">{row.method ?? "—"}</td>
+                          <td className="px-3 py-3 text-xs font-mono font-semibold text-secondary">
+                            {row.remaining > 0 ? fmt(row.remaining) : <span className="text-success">Settled</span>}
+                          </td>
+                        </tr>
+                      ))}
                     </tbody>
                   </table>
                 </div>
@@ -1695,7 +1807,7 @@ export default function Report() {
               ].map((t) => (
                 <div key={t.label} className="bg-card border border-border rounded-[var(--radius-lg)] p-4">
                   <div className="text-[11px] font-semibold text-muted uppercase tracking-wide mb-1">{t.label}</div>
-                  <div className="text-base font-mono font-bold text-foreground">{fmt(t.value)}</div>
+                  <div className="text-base font-bold text-foreground">{fmt(t.value)}</div>
                 </div>
               ))}
             </div>
@@ -1705,10 +1817,10 @@ export default function Report() {
                 <div className="py-16 text-center text-sm text-muted">No payments or expenses for this period</div>
               ) : (
                 <div className="overflow-x-auto">
-                  <table className="w-full border-collapse min-w-[780px]">
+                  <table className="w-full border-collapse min-w-[700px]">
                     <thead>
                       <tr className="bg-primary/[0.07] border-b-2 border-primary/20">
-                        {["Client / Expense", "Cash", "Bank", "Bank Name", "Mobile", "Receiver", "Depense", "Amount"].map((h) => (
+                        {["Client / Category", "Loan Date", "Amount", "Detail (Bank / Receiver)"].map((h) => (
                           <th key={h} className="text-[11px] font-bold text-primary uppercase tracking-wider px-3 py-3.5 whitespace-nowrap text-left">
                             {h}
                           </th>
@@ -1716,54 +1828,90 @@ export default function Report() {
                       </tr>
                     </thead>
                     <tbody>
-                      {payDayKeys.map((date) => {
+                      {[...payDayKeys].sort((a, b) => a.localeCompare(b)).map((date) => {
                         const dayPayments = payInRange.filter((p) => p.date === date);
                         const dayExpenses = expInRange.filter((e) => e.date === date);
-                        const dayCash = dayPayments.filter((p) => p.mode === "cash").reduce((s, p) => s + p.amount, 0);
-                        const dayBank = dayPayments.filter((p) => p.mode === "bank").reduce((s, p) => s + p.amount, 0);
-                        const dayTel = dayPayments.filter((p) => p.mode === "telephone").reduce((s, p) => s + p.amount, 0);
-                        const dayExp = dayExpenses.reduce((s, e) => s + e.amount, 0);
+                        const cash = dayPayments.filter((p) => p.mode === "cash");
+                        const bank = dayPayments.filter((p) => p.mode === "bank");
+                        const tel = dayPayments.filter((p) => p.mode === "telephone");
+                        const dCash = cash.reduce((s, p) => s + p.amount, 0);
+                        const dBank = bank.reduce((s, p) => s + p.amount, 0);
+                        const dTel = tel.reduce((s, p) => s + p.amount, 0);
+                        const dExp = dayExpenses.reduce((s, e) => s + e.amount, 0);
+
+                        const categoryRow = (label: string, color: string) => (
+                          <tr key={`${date}-${label}`} className="bg-accent/20">
+                            <td colSpan={4} className="px-3 py-1.5 text-[11px] font-bold uppercase tracking-wide" style={{ color }}>
+                              {label}
+                            </td>
+                          </tr>
+                        );
+
                         return (
                           <FragmentDay key={date}>
-                            <tr className="bg-accent/30">
-                              <td colSpan={8} className="px-3 py-2 text-xs font-bold text-foreground">{fmtDate(date)}</td>
+                            <tr className="bg-primary/[0.06]">
+                              <td colSpan={4} className="px-3 py-2 text-xs font-bold text-foreground">{fmtDate(date)}</td>
                             </tr>
-                            {dayPayments.map((p) => {
+
+                            {cash.length > 0 && categoryRow("Cash", "#3FA66B")}
+                            {cash.map((p) => {
                               const client = clients.find((c) => c.id === p.clientId);
+                              const loanDate = getReportDate(p.reportId);
                               return (
-                                <tr key={p.id} className="border-b border-border/40">
-                                  <td className="px-3 py-2 text-xs text-foreground whitespace-nowrap">{client?.name ?? "—"}</td>
-                                  <td className="px-3 py-2 text-xs font-mono text-success">{p.mode === "cash" ? fmt(p.amount) : "—"}</td>
-                                  <td className="px-3 py-2 text-xs font-mono text-primary">{p.mode === "bank" ? fmt(p.amount) : "—"}</td>
-                                  <td className="px-3 py-2 text-xs text-muted">{p.mode === "bank" ? getBankName(p.bankId) : "—"}</td>
-                                  <td className="px-3 py-2 text-xs font-mono text-secondary">{p.mode === "telephone" ? fmt(p.amount) : "—"}</td>
-                                  <td className="px-3 py-2 text-xs text-muted">{p.mode === "telephone" ? (p.receiverName || "—") : "—"}</td>
-                                  <td className="px-3 py-2 text-xs text-muted">—</td>
+                                <tr key={p.id} className="border-b border-border/30">
+                                  <td className="px-3 py-2 pl-6 text-xs text-foreground whitespace-nowrap">{client?.name ?? "—"}</td>
+                                  <td className="px-3 py-2 text-xs font-mono text-muted whitespace-nowrap">{loanDate ? fmtDate(loanDate) : "—"}</td>
+                                  <td className="px-3 py-2 text-xs font-mono text-success">{fmt(p.amount)}</td>
                                   <td className="px-3 py-2 text-xs text-muted">—</td>
                                 </tr>
                               );
                             })}
+
+                            {bank.length > 0 && categoryRow("Bank", "#2E9E8F")}
+                            {bank.map((p) => {
+                              const client = clients.find((c) => c.id === p.clientId);
+                              const loanDate = getReportDate(p.reportId);
+                              return (
+                                <tr key={p.id} className="border-b border-border/30">
+                                  <td className="px-3 py-2 pl-6 text-xs text-foreground whitespace-nowrap">{client?.name ?? "—"}</td>
+                                  <td className="px-3 py-2 text-xs font-mono text-muted whitespace-nowrap">{loanDate ? fmtDate(loanDate) : "—"}</td>
+                                  <td className="px-3 py-2 text-xs font-mono text-primary">{fmt(p.amount)}</td>
+                                  <td className="px-3 py-2 text-xs text-muted">{getBankName(p.bankId)}</td>
+                                </tr>
+                              );
+                            })}
+
+                            {tel.length > 0 && categoryRow("Mobile Money", "#D99A3D")}
+                            {tel.map((p) => {
+                              const client = clients.find((c) => c.id === p.clientId);
+                              const loanDate = getReportDate(p.reportId);
+                              return (
+                                <tr key={p.id} className="border-b border-border/30">
+                                  <td className="px-3 py-2 pl-6 text-xs text-foreground whitespace-nowrap">{client?.name ?? "—"}</td>
+                                  <td className="px-3 py-2 text-xs font-mono text-muted whitespace-nowrap">{loanDate ? fmtDate(loanDate) : "—"}</td>
+                                  <td className="px-3 py-2 text-xs font-mono text-secondary">{fmt(p.amount)}</td>
+                                  <td className="px-3 py-2 text-xs text-muted">{p.receiverName || "—"}</td>
+                                </tr>
+                              );
+                            })}
+
+                            {dayExpenses.length > 0 && categoryRow("Depenses", "#E05C5C")}
                             {dayExpenses.map((e) => (
-                              <tr key={e.id} className="border-b border-border/40">
-                                <td className="px-3 py-2 text-xs text-muted italic">(expense)</td>
+                              <tr key={e.id} className="border-b border-border/30">
+                                <td className="px-3 py-2 pl-6 text-xs text-foreground whitespace-nowrap">{e.name}</td>
                                 <td className="px-3 py-2 text-xs text-muted">—</td>
-                                <td className="px-3 py-2 text-xs text-muted">—</td>
-                                <td className="px-3 py-2 text-xs text-muted">—</td>
-                                <td className="px-3 py-2 text-xs text-muted">—</td>
-                                <td className="px-3 py-2 text-xs text-muted">&gt;</td>
-                                <td className="px-3 py-2 text-xs text-foreground">{e.name}</td>
                                 <td className="px-3 py-2 text-xs font-mono text-danger">{fmt(e.amount)}</td>
+                                <td className="px-3 py-2 text-xs text-muted">—</td>
                               </tr>
                             ))}
+
                             <tr className="border-b-2 border-border bg-accent/50 font-semibold">
                               <td className="px-3 py-2 text-xs text-foreground">Subtotal — {fmtDate(date)}</td>
-                              <td className="px-3 py-2 text-xs font-mono text-success">{fmt(dayCash)}</td>
-                              <td className="px-3 py-2 text-xs font-mono text-primary">{fmt(dayBank)}</td>
-                              <td className="px-3 py-2"></td>
-                              <td className="px-3 py-2 text-xs font-mono text-secondary">{fmt(dayTel)}</td>
-                              <td className="px-3 py-2"></td>
-                              <td className="px-3 py-2"></td>
-                              <td className="px-3 py-2 text-xs font-mono text-danger">{fmt(dayExp)}</td>
+                              <td className="px-3 py-2 text-xs text-muted">
+                                Cash {fmt(dCash)} · Bank {fmt(dBank)} · Mobile {fmt(dTel)}
+                              </td>
+                              <td className="px-3 py-2 text-xs font-mono text-foreground">{fmt(dCash + dBank + dTel)}</td>
+                              <td className="px-3 py-2 text-xs font-mono text-danger">Depenses {fmt(dExp)}</td>
                             </tr>
                           </FragmentDay>
                         );
@@ -2208,7 +2356,7 @@ export default function Report() {
                               "bg-success/10 text-success border border-success/20",
                           }
                         : {
-                            label: "⏳ Loan",
+                            label: "Loan",
                             className:
                               "bg-secondary/10 text-secondary border border-secondary/20",
                           },

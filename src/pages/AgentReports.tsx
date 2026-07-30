@@ -7,6 +7,7 @@ import {
   FileText,
   List,
   LayoutGrid,
+  X,
 } from "lucide-react";
 import { useStore } from "../lib/store";
 import { supabase } from "../lib/supabase";
@@ -19,6 +20,13 @@ import Swal from "sweetalert2";
 
 type DateFilter = "all" | "daily" | "weekly" | "monthly" | "annual";
 type ViewMode = "list" | "grid";
+
+type SaleLine = {
+  lineId: string;
+  reportId?: string; // present when this line already exists in the DB (edit mode)
+  productId: string;
+  qty: string;
+};
 
 function inRange(date: string, filter: DateFilter): boolean {
   if (filter === "all") return true;
@@ -36,6 +44,27 @@ function inRange(date: string, filter: DateFilter): boolean {
     );
   if (filter === "annual") return d.getFullYear() === now.getFullYear();
   return true;
+}
+
+// A "sale" groups every product line sold together in one go. Legacy rows
+// (created before multi-product sales existed) have no sale_group_id, so
+// each one is its own group of one.
+function groupKeyOf(r: AgentReport): string {
+  return r.saleGroupId ?? r.id;
+}
+
+function groupReports(rows: AgentReport[]): { key: string; lines: AgentReport[] }[] {
+  const map = new Map<string, AgentReport[]>();
+  const order: string[] = [];
+  for (const r of rows) {
+    const key = groupKeyOf(r);
+    if (!map.has(key)) {
+      map.set(key, []);
+      order.push(key);
+    }
+    map.get(key)!.push(r);
+  }
+  return order.map((key) => ({ key, lines: map.get(key)! }));
 }
 
 export default function AgentReports() {
@@ -57,8 +86,6 @@ export default function AgentReports() {
     loadMarketingAgents();
   }, []);
 
-  const getAgentName = (id?: string) =>
-    marketingAgents.find((a) => a.id === id)?.name ?? "—";
   const reports = state.agentReports.filter(
     (r) => !r.deleted && (role !== "marketing_agent" || r.agentId === state.user?.id),
   );
@@ -76,8 +103,8 @@ export default function AgentReports() {
   const [search, setSearch] = useState("");
   const [view, setView] = useState<ViewMode>("list");
   const [modal, setModal] = useState<"add" | "edit" | null>(null);
-  const [editing, setEditing] = useState<AgentReport | null>(null);
-  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [confirmGroup, setConfirmGroup] = useState<AgentReport[] | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const defaultProduct = products[0];
   const [saleType, setSaleType] = useState<"client" | "walkin">("client");
@@ -88,19 +115,21 @@ export default function AgentReports() {
     agentId: "",
     clientId: "",
     customerName: "",
-    productId: defaultProduct?.id ?? "",
-    qty: "",
-    paymentStatus: "paid" as PaymentStatus,
   });
+  const [lines, setLines] = useState<SaleLine[]>([]);
+  // The full original rows for the sale being edited (so we can preserve
+  // fields like createdBy when patching), and which of them are still kept.
+  const [editingLines, setEditingLines] = useState<AgentReport[]>([]);
+  const editingLineIds = editingLines.map((l) => l.id);
+  const editingGroupKey = editingLines[0] ? groupKeyOf(editingLines[0]) : null;
 
   const selectedClient = clients.find((c) => c.id === form.clientId);
-  const selectedProduct =
-    products.find((p) => p.id === form.productId) ?? defaultProduct;
-  const unitPrice = selectedProduct?.pricePerBox ?? 0;
-  const totalPrice = parseInt(form.qty || "0") * unitPrice;
 
   const getName = (id: string, list: { id: string; name: string }[]) =>
     list.find((i) => i.id === id)?.name ?? "—";
+  const getAgentName = (id?: string) =>
+    marketingAgents.find((a) => a.id === id)?.name ?? "—";
+  const getProductName = (id: string) => products.find((p) => p.id === id)?.name ?? "—";
 
   const getBuyerLabel = (r: AgentReport) =>
     r.clientId ? getName(r.clientId, clients) : r.customerName?.trim() || "Walk-in customer";
@@ -120,44 +149,16 @@ export default function AgentReports() {
     );
   });
 
+  const groups = groupReports(filtered);
   const totalQty = filtered.reduce((s, r) => s + r.qty, 0);
   const totalAmt = filtered.reduce((s, r) => s + r.totalPrice, 0);
 
-  const openAdd = () => {
-    setSaleType("client");
-    setForm({
-      date: today(),
-      agentId: role === "marketing_agent" ? state.user?.id || agents[0]?.id || "" : agents[0]?.id || "",
-      clientId: clients[0]?.id || "",
-      customerName: "",
-      productId: defaultProduct?.id ?? "",
-      qty: "",
-      paymentStatus: "paid",
-    });
-    setModal("add");
-  };
-  const openEdit = (r: AgentReport) => {
-    setEditing(r);
-    setSaleType(r.clientId ? "client" : "walkin");
-    setForm({
-      date: r.date,
-      agentId: r.agentId,
-      clientId: r.clientId ?? "",
-      customerName: r.customerName ?? "",
-      productId: r.productId,
-      qty: r.qty.toString(),
-      paymentStatus: r.paymentStatus,
-    });
-    setModal("edit");
-  };
-  const closeModal = () => {
-    setModal(null);
-    setEditing(null);
-  };
-
-const [saving, setSaving] = useState(false);
-
-  const getAgentProductAvailable = (agentId: string, productId: string, excludeReportId?: string) => {
+  // ---------- stock availability ----------
+  const getAgentProductAvailable = (
+    agentId: string,
+    productId: string,
+    excludeReportIds: string[] = [],
+  ) => {
     const dispatched = state.stockMovements
       .filter((m) => m.type === "marketing_agent" && m.agentId === agentId && m.productId === productId && !m.isReturn)
       .reduce((s, m) => s + m.stockOut, 0);
@@ -165,95 +166,174 @@ const [saving, setSaving] = useState(false);
       .filter((m) => m.type === "marketing_agent" && m.agentId === agentId && m.productId === productId && m.isReturn)
       .reduce((s, m) => s + m.stockIn, 0);
     const distributed = state.agentReports
-      .filter((r) => !r.deleted && r.agentId === agentId && r.productId === productId && r.id !== excludeReportId)
+      .filter((r) => !r.deleted && r.agentId === agentId && r.productId === productId && !excludeReportIds.includes(r.id))
       .reduce((s, r) => s + r.qty, 0);
     return dispatched - returned - distributed;
   };
 
-  const availableForSelectedProduct = form.agentId && form.productId
-    ? getAgentProductAvailable(form.agentId, form.productId, editing?.id)
-    : 0;
-  const piecesPerBoxForSelected = selectedProduct?.piecesPerBox ?? selectedProduct?.qtyPerBox ?? null;
+  // Availability for one line in the form, accounting for other lines in
+  // the same sale that already claim boxes of the same product.
+  const getLineAvailable = (line: SaleLine) => {
+    if (!form.agentId || !line.productId) return 0;
+    const base = getAgentProductAvailable(form.agentId, line.productId, editingLineIds);
+    const claimedByOtherLines = lines
+      .filter((l) => l.lineId !== line.lineId && l.productId === line.productId)
+      .reduce((s, l) => s + (parseFloat(l.qty) || 0), 0);
+    return base - claimedByOtherLines;
+  };
 
+  const lineDetails = lines.map((l) => {
+    const product = products.find((p) => p.id === l.productId);
+    const unitPrice = product?.pricePerBox ?? 0;
+    const qty = parseFloat(l.qty || "0") || 0;
+    return { ...l, product, unitPrice, qtyNum: qty, total: qty * unitPrice };
+  });
+  const grandTotal = lineDetails.reduce((s, l) => s + l.total, 0);
+  const grandQty = lineDetails.reduce((s, l) => s + l.qtyNum, 0);
+
+  // ---------- modal open/close ----------
+  const openAdd = () => {
+    setSaleType("client");
+    setEditingLines([]);
+    setForm({
+      date: today(),
+      agentId: role === "marketing_agent" ? state.user?.id || agents[0]?.id || "" : agents[0]?.id || "",
+      clientId: clients[0]?.id || "",
+      customerName: "",
+    });
+    setLines([{ lineId: crypto.randomUUID(), productId: defaultProduct?.id ?? "", qty: "" }]);
+    setModal("add");
+  };
+
+  const openEdit = (groupLines: AgentReport[]) => {
+    const first = groupLines[0];
+    setEditingLines(groupLines);
+    setSaleType(first.clientId ? "client" : "walkin");
+    setForm({
+      date: first.date,
+      agentId: first.agentId,
+      clientId: first.clientId ?? "",
+      customerName: first.customerName ?? "",
+    });
+    setLines(
+      groupLines.map((l) => ({
+        lineId: crypto.randomUUID(),
+        reportId: l.id,
+        productId: l.productId,
+        qty: l.qty.toString(),
+      })),
+    );
+    setModal("edit");
+  };
+
+  const closeModal = () => {
+    setModal(null);
+    setEditingLines([]);
+    setLines([]);
+  };
+
+  // ---------- line management ----------
+  const addLine = () => {
+    const usedIds = lines.map((l) => l.productId);
+    const nextProduct = products.find((p) => !usedIds.includes(p.id)) ?? products[0];
+    setLines((ls) => [...ls, { lineId: crypto.randomUUID(), productId: nextProduct?.id ?? "", qty: "" }]);
+  };
+  const removeLine = (lineId: string) => setLines((ls) => ls.filter((l) => l.lineId !== lineId));
+  const updateLine = (lineId: string, patch: Partial<SaleLine>) =>
+    setLines((ls) => ls.map((l) => (l.lineId === lineId ? { ...l, ...patch } : l)));
+
+  // ---------- save ----------
   const handleSave = async () => {
-    if (!form.agentId || !form.qty || !state.user) return;
+    if (!state.user || !form.agentId) return;
     if (saleType === "client" && !form.clientId) return;
-
-    const requestedQty = parseFloat(form.qty);
-    const available = getAgentProductAvailable(form.agentId, form.productId, editing?.id);
-    if (requestedQty > available) {
-      Swal.fire({
-        icon: "warning",
-        title: "Not enough stock on hand",
-        text: `Dear agent you only have ${available} box${available === 1 ? "" : "es"} of ${selectedProduct?.name ?? "this product"}. You entered ${requestedQty}.`,
-        confirmButtonColor: "#2E9E8F",
-      });
+    if (lines.length === 0 || lines.some((l) => !l.productId || !l.qty || parseFloat(l.qty) <= 0)) {
+      Swal.fire({ icon: "warning", title: "Add at least one product", text: "Every product line needs a product and a quantity.", confirmButtonColor: "#2E9E8F" });
       return;
     }
 
-    setSaving(true);
+    // Aggregate requested qty per product across all lines, then check stock once per product.
+    const requestedByProduct = new Map<string, number>();
+    for (const l of lineDetails) {
+      requestedByProduct.set(l.productId, (requestedByProduct.get(l.productId) ?? 0) + l.qtyNum);
+    }
+    for (const [productId, qty] of requestedByProduct) {
+      const available = getAgentProductAvailable(form.agentId, productId, editingLineIds);
+      if (qty > available) {
+        Swal.fire({
+          icon: "warning",
+          title: "Not enough stock on hand",
+          text: `Dear agent you only have ${available} box${available === 1 ? "" : "es"} of ${getProductName(productId)}. You entered ${qty}.`,
+          confirmButtonColor: "#2E9E8F",
+        });
+        return;
+      }
+    }
 
-    const payload = {
+    setSaving(true);
+    const paymentStatus: PaymentStatus = saleType === "walkin" ? "paid" : "loan";
+    const buyerLabel = saleType === "client" ? getName(form.clientId, clients) : (form.customerName.trim() || "Walk-in customer");
+
+    const basePayload = (l: (typeof lineDetails)[number]) => ({
       agent_id: form.agentId,
       client_id: saleType === "client" ? form.clientId : null,
       customer_name: saleType === "walkin" ? form.customerName.trim() || null : null,
-      product_id: form.productId,
+      product_id: l.productId,
       date: form.date,
-      qty: parseFloat(form.qty),
-      unit_price: unitPrice,
-      total_price: totalPrice,
-      payment_status: saleType === "walkin" ? "paid" : "loan",
+      qty: l.qtyNum,
+      unit_price: l.unitPrice,
+      total_price: l.total,
+      payment_status: paymentStatus,
       created_by: state.user.name,
-    };
+    });
+
+    const toAgentReport = (d: any): AgentReport => ({
+      id: d.id,
+      agentId: d.agent_id,
+      clientId: d.client_id,
+      customerName: d.customer_name ?? undefined,
+      productId: d.product_id,
+      date: d.date,
+      qty: Number(d.qty),
+      unitPrice: Number(d.unit_price),
+      totalPrice: Number(d.total_price),
+      paymentStatus: d.payment_status,
+      createdBy: d.created_by,
+      saleGroupId: d.sale_group_id ?? undefined,
+      deleted: false,
+    });
 
     if (modal === "add") {
-      const { data, error } = await supabase
-        .from("agent_reports")
-        .insert(payload)
-        .select()
-        .single();
+      const saleGroupId = crypto.randomUUID();
+      const payloads = lineDetails.map((l) => ({ ...basePayload(l), sale_group_id: saleGroupId }));
 
-      setSaving(false);
+      const { data, error } = await supabase.from("agent_reports").insert(payloads).select();
       if (error) {
+        setSaving(false);
         Swal.fire({ icon: "error", title: "Could not save report", text: error.message, confirmButtonColor: "#2E9E8F" });
         return;
       }
 
-      const newReport: AgentReport = {
-        id: data.id,
-        agentId: data.agent_id,
-        clientId: data.client_id,
-        customerName: data.customer_name ?? undefined,
-        productId: data.product_id,
-        date: data.date,
-        qty: Number(data.qty),
-        unitPrice: Number(data.unit_price),
-        totalPrice: Number(data.total_price),
-        paymentStatus: data.payment_status,
-        createdBy: data.created_by,
-        deleted: false,
-      };
-      dispatch({ type: "ADD_AGENT_REPORT", payload: newReport });
+      const newReports = (data ?? []).map(toAgentReport);
+      newReports.forEach((nr) => dispatch({ type: "ADD_AGENT_REPORT", payload: nr }));
 
-      const buyerLabel = saleType === "client" ? getName(form.clientId, clients) : (form.customerName.trim() || "Walk-in customer");
       await supabase.from("activity_logs").insert({
         actor_id: state.user.id,
         actor_name: state.user.name,
         action: "created",
         entity_type: "agent_report",
-        entity_id: data.id,
-        entity_name: `${buyerLabel} — ${getName(form.productId, products)}`,
+        entity_id: saleGroupId,
+        entity_name: `${buyerLabel} — ${lineDetails.length} product${lineDetails.length === 1 ? "" : "s"} (${grandQty} boxes)`,
       });
 
-      if (saleType === "walkin") {
+      if (saleType === "walkin" && newReports.length) {
         const { data: payData, error: payError } = await supabase
           .from("payments")
           .insert({
             client_id: null,
             agent_id: form.agentId,
-            report_id: data.id,
+            report_id: newReports[0].id,
             date: form.date,
-            amount: totalPrice,
+            amount: grandTotal,
             mode: walkinMode,
             receiver_name: walkinMode === "telephone" ? walkinReceiver || null : null,
             created_by: state.user.name,
@@ -277,52 +357,73 @@ const [saving, setSaving] = useState(false);
           });
         }
       }
-    } else if (editing) {
-    } else if (editing) {
-      const { error } = await supabase
-        .from("agent_reports")
-        .update(payload)
-        .eq("id", editing.id);
+    } else if (modal === "edit") {
+      const keepIds = new Set(lines.filter((l) => l.reportId).map((l) => l.reportId as string));
+      const toDelete = editingLineIds.filter((id) => !keepIds.has(id));
 
-      setSaving(false);
-      if (error) {
-        Swal.fire({ icon: "error", title: "Could not update report", text: error.message, confirmButtonColor: "#2E9E8F" });
-        return;
+      // Update lines that already exist
+      for (const l of lineDetails.filter((l) => l.reportId)) {
+        const original = editingLines.find((o) => o.id === l.reportId);
+        const { error } = await supabase.from("agent_reports").update(basePayload(l)).eq("id", l.reportId);
+        if (error) {
+          setSaving(false);
+          Swal.fire({ icon: "error", title: "Could not update report", text: error.message, confirmButtonColor: "#2E9E8F" });
+          return;
+        }
+        dispatch({
+          type: "UPDATE_AGENT_REPORT",
+          payload: {
+            ...(original as AgentReport),
+            agentId: form.agentId,
+            clientId: saleType === "client" ? form.clientId : null,
+            customerName: saleType === "walkin" ? form.customerName.trim() || undefined : undefined,
+            productId: l.productId,
+            date: form.date,
+            qty: l.qtyNum,
+            unitPrice: l.unitPrice,
+            totalPrice: l.total,
+            paymentStatus,
+          },
+        });
       }
 
-      dispatch({
-        type: "UPDATE_AGENT_REPORT",
-        payload: {
-          ...editing,
-          agentId: form.agentId,
-          clientId: saleType === "client" ? form.clientId : null,
-          customerName: saleType === "walkin" ? form.customerName.trim() || undefined : undefined,
-          productId: form.productId,
-          date: form.date,
-          qty: parseInt(form.qty),
-          unitPrice,
-          totalPrice,
-          paymentStatus: saleType === "walkin" ? "paid" : form.paymentStatus,
-        },
-      });
+      // Insert lines newly added while editing this sale
+      const newLines = lineDetails.filter((l) => !l.reportId);
+      if (newLines.length) {
+        const payloads = newLines.map((l) => ({ ...basePayload(l), sale_group_id: editingGroupKey }));
+        const { data, error } = await supabase.from("agent_reports").insert(payloads).select();
+        if (error) {
+          setSaving(false);
+          Swal.fire({ icon: "error", title: "Could not add product to report", text: error.message, confirmButtonColor: "#2E9E8F" });
+          return;
+        }
+        (data ?? []).map(toAgentReport).forEach((nr) => dispatch({ type: "ADD_AGENT_REPORT", payload: nr }));
+      }
+
+      // Soft-delete lines removed from this sale
+      for (const id of toDelete) {
+        await supabase.from("agent_reports").update({ deleted: true }).eq("id", id);
+        dispatch({ type: "DELETE_AGENT_REPORT", id });
+      }
     }
+
+    setSaving(false);
     closeModal();
   };
 
-  const handleDelete = async (id: string) => {
-    const { error } = await supabase
-      .from("agent_reports")
-      .update({ deleted: true })
-      .eq("id", id);
-    if (error) {
-      Swal.fire({ icon: "error", title: "Could not delete report", text: error.message, confirmButtonColor: "#2E9E8F" });
-      return;
+  const handleDeleteGroup = async (groupLines: AgentReport[]) => {
+    for (const l of groupLines) {
+      const { error } = await supabase.from("agent_reports").update({ deleted: true }).eq("id", l.id);
+      if (error) {
+        Swal.fire({ icon: "error", title: "Could not delete report", text: error.message, confirmButtonColor: "#2E9E8F" });
+        return;
+      }
+      dispatch({ type: "DELETE_AGENT_REPORT", id: l.id });
     }
-    dispatch({ type: "DELETE_AGENT_REPORT", id });
   };
 
   const setF =
-    (k: string) =>
+    (k: "date" | "agentId" | "clientId" | "customerName") =>
     (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
       setForm((f) => ({ ...f, [k]: e.target.value }));
 
@@ -432,7 +533,7 @@ const [saving, setSaving] = useState(false);
       {/* Summary row */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4 mb-6">
         {[
-          { label: "Records", value: filtered.length.toString() },
+          { label: "Sales", value: groups.length.toString() },
           { label: "Total Qty", value: `${totalQty.toLocaleString()} boxes` },
           { label: "Total Amount", value: fmt(totalAmt) },
         ].map((s) => (
@@ -446,7 +547,7 @@ const [saving, setSaving] = useState(false);
         ))}
       </div>
 
-      {filtered.length === 0 ? (
+      {groups.length === 0 ? (
         <div className="bg-card border border-border rounded-[var(--radius-lg)] flex flex-col items-center py-16">
           <FileText size={32} className="text-muted/40 mb-3" />
           <p className="text-sm text-muted">No reports match your filters</p>
@@ -454,33 +555,36 @@ const [saving, setSaving] = useState(false);
       ) : view === "grid" ? (
         /* ---------- GRID VIEW ---------- */
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filtered.map((r) => {
-            const client = clients.find((c) => c.id === r.clientId);
+          {groups.map(({ key, lines: groupLines }) => {
+            const first = groupLines[0];
+            const client = clients.find((c) => c.id === first.clientId);
+            const qtySum = groupLines.reduce((s, r) => s + r.qty, 0);
+            const totalSum = groupLines.reduce((s, r) => s + r.totalPrice, 0);
             return (
               <div
-                key={r.id}
+                key={key}
                 className="bg-card border border-border rounded-[var(--radius-lg)] p-5 hover:shadow-md hover:-translate-y-0.5 transition-all duration-200"
               >
                 <div className="flex items-start justify-between mb-3">
                   <span
                     className={`inline-flex items-center text-[11px] px-2.5 py-1 rounded-full ${
-                      r.paymentStatus === "paid"
+                      first.paymentStatus === "paid"
                         ? "bg-success/10 text-success border border-success/20"
                         : "bg-secondary/10 text-secondary border border-secondary/20"
                     }`}
                   >
-                    {r.paymentStatus === "paid" ? "✓ Paid" : "⏳ Loan"}
+                    {first.paymentStatus === "paid" ? "✓ Paid" : "Loan"}
                   </span>
                   <span className="text-xs text-muted font-mono">
-                    {fmtDate(r.date)}
+                    {fmtDate(first.date)}
                   </span>
                 </div>
 
                 <div className="text-sm text-foreground truncate">
-                  {getName(r.agentId, agents)}
+                  {getAgentName(first.agentId)}
                 </div>
                 <div className="text-xs text-muted mb-1">
-                  → {getBuyerLabel(r)}
+                  → {getBuyerLabel(first)}
                 </div>
                 {client ? (
                   <div className="text-[11px] text-muted mb-3">
@@ -490,21 +594,24 @@ const [saving, setSaving] = useState(false);
                   <div className="text-[11px] text-muted mb-3 italic">Walk-in sale</div>
                 )}
 
-                <div className="grid grid-cols-3 gap-2 pt-3 border-t border-border/60 text-center">
+                <div className="space-y-1 mb-3">
+                  {groupLines.map((l) => (
+                    <div key={l.id} className="flex items-center justify-between text-xs">
+                      <span className="text-foreground truncate">
+                        {getProductName(l.productId)} <span className="text-muted">× {l.qty}</span>
+                      </span>
+                      <span className="font-mono text-muted flex-shrink-0 ml-2">{fmt(l.totalPrice)}</span>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 pt-3 border-t border-border/60 text-center">
                   <div>
                     <div className="text-[10px] text-muted uppercase tracking-wide mb-0.5">
-                      Qty
+                      Total Qty
                     </div>
                     <div className="text-sm font-mono text-foreground">
-                      {r.qty}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-[10px] text-muted uppercase tracking-wide mb-0.5">
-                      Unit
-                    </div>
-                    <div className="text-sm font-mono text-muted">
-                      {fmt(r.unitPrice)}
+                      {qtySum}
                     </div>
                   </div>
                   <div>
@@ -512,7 +619,7 @@ const [saving, setSaving] = useState(false);
                       Total
                     </div>
                     <div className="text-sm font-mono text-foreground">
-                      {fmt(r.totalPrice)}
+                      {fmt(totalSum)}
                     </div>
                   </div>
                 </div>
@@ -520,17 +627,19 @@ const [saving, setSaving] = useState(false);
                 {canEdit && (
                   <div className="flex items-center justify-end gap-1 mt-3 pt-3 border-t border-border/60">
                     <button
-                      onClick={() => openEdit(r)}
+                      onClick={() => openEdit(groupLines)}
                       className="p-1.5 text-muted hover:text-primary hover:bg-primary/10 rounded-[var(--radius-sm)] transition-colors"
                     >
                       <Pencil size={13} />
                     </button>
-                    <button
-                      onClick={() => setConfirmId(r.id)}
-                      className="p-1.5 text-muted hover:text-danger hover:bg-danger/10 rounded-[var(--radius-sm)] transition-colors"
-                    >
-                      <Trash2 size={13} />
-                    </button>
+                    {canDelete && (
+                      <button
+                        onClick={() => setConfirmGroup(groupLines)}
+                        className="p-1.5 text-muted hover:text-danger hover:bg-danger/10 rounded-[var(--radius-sm)] transition-colors"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -538,10 +647,10 @@ const [saving, setSaving] = useState(false);
           })}
         </div>
       ) : (
-        /* ---------- LIST VIEW — table on lg+, stacked cards below lg (8 cols needs more room) ---------- */
+        /* ---------- LIST VIEW — table on lg+, stacked cards below lg ---------- */
         <div className="bg-card border border-border rounded-[var(--radius-lg)] overflow-hidden">
           <div className="hidden lg:block overflow-x-auto">
-            <table className="w-full min-w-[800px]">
+            <table className="w-full min-w-[860px]">
               <thead>
                 <tr className="border-b border-border bg-background/50">
                   {[
@@ -549,8 +658,8 @@ const [saving, setSaving] = useState(false);
                     "Agent",
                     "Client",
                     "Location",
+                    "Products",
                     "Qty",
-                    "Unit Price",
                     "Total",
                     "Status",
                   ].map((h) => (
@@ -569,23 +678,26 @@ const [saving, setSaving] = useState(false);
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((r, i) => {
-                  const client = clients.find((c) => c.id === r.clientId);
+                {groups.map(({ key, lines: groupLines }, i) => {
+                  const first = groupLines[0];
+                  const client = clients.find((c) => c.id === first.clientId);
+                  const qtySum = groupLines.reduce((s, r) => s + r.qty, 0);
+                  const totalSum = groupLines.reduce((s, r) => s + r.totalPrice, 0);
                   return (
                     <tr
-                      key={r.id}
-                      className={`border-b border-border/50 hover:bg-accent/40 transition-colors ${i === filtered.length - 1 ? "border-b-0" : ""}`}
+                      key={key}
+                      className={`border-b border-border/50 hover:bg-accent/40 transition-colors align-top ${i === groups.length - 1 ? "border-b-0" : ""}`}
                     >
                       <td className="px-4 py-3.5 text-sm text-foreground font-mono whitespace-nowrap">
-                        {fmtDate(r.date)}
+                        {fmtDate(first.date)}
                       </td>
                       <td className="px-4 py-3.5 text-sm font-medium text-foreground whitespace-nowrap">
-                        {getName(r.agentId, agents)}
+                        {getAgentName(first.agentId)}
                       </td>
                       <td className="px-4 py-3.5 text-sm text-foreground whitespace-nowrap">
-                        {getBuyerLabel(r)}
-                        {!r.clientId && (
-                          <span className="ml-1.5 text-[10px] font-semibold text-muted bg-accent/60 px-1.5 py-0.5 rounded-full">Walk-in</span>
+                        {getBuyerLabel(first)}
+                        {!first.clientId && (
+                          <span className="ml-1.5 text-[10px] text-muted bg-accent/60 px-1.5 py-0.5 rounded-full">Walk-in</span>
                         )}
                       </td>
                       <td className="px-4 py-3.5 text-xs text-muted whitespace-nowrap">
@@ -597,41 +709,49 @@ const [saving, setSaving] = useState(false);
                           "—"
                         )}
                       </td>
-                      <td className="px-4 py-3.5 text-sm font-mono text-foreground">
-                        {r.qty}
+                      <td className="px-4 py-3.5 text-xs text-foreground">
+                        <div className="flex flex-col gap-0.5">
+                          {groupLines.map((l) => (
+                            <span key={l.id} className="whitespace-nowrap">
+                              {getProductName(l.productId)} <span className="text-muted">× {l.qty}</span>
+                            </span>
+                          ))}
+                        </div>
                       </td>
-                      <td className="px-4 py-3.5 text-sm font-mono text-muted">
-                        {fmt(r.unitPrice)}
+                      <td className="px-4 py-3.5 text-sm font-mono text-foreground">
+                        {qtySum}
                       </td>
                       <td className="px-4 py-3.5 text-sm font-mono text-foreground">
-                        {fmt(r.totalPrice)}
+                        {fmt(totalSum)}
                       </td>
                       <td className="px-4 py-3.5">
                         <span
                           className={`inline-flex items-center text-[11px] px-2.5 py-1 rounded-full whitespace-nowrap ${
-                            r.paymentStatus === "paid"
+                            first.paymentStatus === "paid"
                               ? "bg-success/10 text-success border border-success/20"
                               : "bg-secondary/10 text-secondary border border-secondary/20"
                           }`}
                         >
-                          {r.paymentStatus === "paid" ? "✓ Paid" : "⏳ Loan"}
+                          {first.paymentStatus === "paid" ? "✓ Paid" : "Loan"}
                         </span>
                       </td>
                       {canEdit && (
                         <td className="px-4 py-3.5">
                           <div className="flex items-center justify-end gap-1">
                             <button
-                              onClick={() => openEdit(r)}
+                              onClick={() => openEdit(groupLines)}
                               className="p-2 text-muted hover:text-primary hover:bg-primary/10 rounded-[var(--radius-sm)] transition-colors"
                             >
                               <Pencil size={13} />
                             </button>
-                            <button
-                              onClick={() => setConfirmId(r.id)}
-                              className="p-2 text-muted hover:text-danger hover:bg-danger/10 rounded-[var(--radius-sm)] transition-colors"
-                            >
-                              <Trash2 size={13} />
-                            </button>
+                            {canDelete && (
+                              <button
+                                onClick={() => setConfirmGroup(groupLines)}
+                                className="p-2 text-muted hover:text-danger hover:bg-danger/10 rounded-[var(--radius-sm)] transition-colors"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            )}
                           </div>
                         </td>
                       )}
@@ -644,29 +764,32 @@ const [saving, setSaving] = useState(false);
 
           {/* Stacked rows: below lg */}
           <div className="lg:hidden divide-y divide-border/50">
-            {filtered.map((r) => {
-              const client = clients.find((c) => c.id === r.clientId);
+            {groups.map(({ key, lines: groupLines }) => {
+              const first = groupLines[0];
+              const client = clients.find((c) => c.id === first.clientId);
+              const qtySum = groupLines.reduce((s, r) => s + r.qty, 0);
+              const totalSum = groupLines.reduce((s, r) => s + r.totalPrice, 0);
               return (
-                <div key={r.id} className="px-4 py-3.5">
+                <div key={key} className="px-4 py-3.5">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs text-muted font-mono">
-                      {fmtDate(r.date)}
+                      {fmtDate(first.date)}
                     </span>
                     <span
                       className={`inline-flex items-center text-[11px] px-2.5 py-1 rounded-full ${
-                        r.paymentStatus === "paid"
+                        first.paymentStatus === "paid"
                           ? "bg-success/10 text-success border border-success/20"
                           : "bg-secondary/10 text-secondary border border-secondary/20"
                       }`}
                     >
-                      {r.paymentStatus === "paid" ? "✓ Paid" : "⏳ Loan"}
+                      {first.paymentStatus === "paid" ? "✓ Paid" : "Loan"}
                     </span>
                   </div>
                   <div className="text-sm font-medium text-foreground">
-                    {getName(r.agentId, agents)}
+                    {getAgentName(first.agentId)}
                   </div>
                   <div className="text-xs text-muted mb-1">
-                    → {getBuyerLabel(r)}
+                    → {getBuyerLabel(first)}
                   </div>
                   {client ? (
                     <div className="text-[11px] text-muted mb-2">
@@ -675,29 +798,38 @@ const [saving, setSaving] = useState(false);
                   ) : (
                     <div className="text-[11px] text-muted mb-2 italic">Walk-in sale</div>
                   )}
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-muted">
-                      {r.qty} boxes ×{" "}
-                      <span className="font-mono">{fmt(r.unitPrice)}</span>
-                    </span>
+                  <div className="space-y-0.5 mb-2">
+                    {groupLines.map((l) => (
+                      <div key={l.id} className="flex items-center justify-between text-xs">
+                        <span className="text-foreground">
+                          {getProductName(l.productId)} <span className="text-muted">× {l.qty}</span>
+                        </span>
+                        <span className="font-mono text-muted">{fmt(l.totalPrice)}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex items-center justify-between pt-1.5 border-t border-border/50">
+                    <span className="text-xs text-muted">{qtySum} boxes total</span>
                     <span className="text-sm font-mono text-foreground">
-                      {fmt(r.totalPrice)}
+                      {fmt(totalSum)}
                     </span>
                   </div>
                   {canEdit && (
                     <div className="flex items-center justify-end gap-1 mt-2 pt-2 border-t border-border/50">
                       <button
-                        onClick={() => openEdit(r)}
+                        onClick={() => openEdit(groupLines)}
                         className="p-2 text-muted hover:text-primary hover:bg-primary/10 rounded-[var(--radius-sm)] transition-colors"
                       >
                         <Pencil size={13} />
                       </button>
-                      <button
-                        onClick={() => setConfirmId(r.id)}
-                        className="p-2 text-muted hover:text-danger hover:bg-danger/10 rounded-[var(--radius-sm)] transition-colors"
-                      >
-                        <Trash2 size={13} />
-                      </button>
+                      {canDelete && (
+                        <button
+                          onClick={() => setConfirmGroup(groupLines)}
+                          className="p-2 text-muted hover:text-danger hover:bg-danger/10 rounded-[var(--radius-sm)] transition-colors"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -809,61 +941,85 @@ const [saving, setSaving] = useState(false);
                 ))}
               </div>
             )}
-            <div>
-              <label className="text-xs text-muted uppercase tracking-wide block mb-1.5">
-                Product
-              </label>
-              <select
-                value={form.productId}
-                onChange={setF("productId")}
-                className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] bg-white focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
-              >
-                {products.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="text-xs text-muted uppercase tracking-wide block mb-1.5">
-                Quantity (boxes)
-              </label>
-              <input
-                type="number"
-                min="1"
-                value={form.qty}
-                onChange={setF("qty")}
-                placeholder="0"
-                className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
-              />
-              {form.agentId && form.productId && (
-                <p className={`text-[11px] mt-1.5 ${availableForSelectedProduct <= 0 ? "text-danger" : "text-muted"}`}>
-                  {availableForSelectedProduct} box{availableForSelectedProduct === 1 ? "" : "es"} available
-                  {piecesPerBoxForSelected ? ` (≈ ${availableForSelectedProduct * piecesPerBoxForSelected} pcs)` : ""}
-                  {" · "}worth {fmt(availableForSelectedProduct * unitPrice)}
-                </p>
-              )}
-            </div>
-            <div>
-              <label className="text-xs text-muted uppercase tracking-wide block mb-1.5">
-                Unit Price
-              </label>
-              <div className="px-3.5 py-2.5 text-sm border border-border/50 rounded-[var(--radius)] bg-background font-mono text-muted">
-                {fmt(unitPrice)}
+
+            {/* ---------- Products (multi-line) ---------- */}
+            <div className="sm:col-span-2">
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs text-muted uppercase tracking-wide">
+                  Products
+                </label>
+                <button
+                  type="button"
+                  onClick={addLine}
+                  className="flex items-center gap-1 text-xs text-primary font-medium hover:underline"
+                >
+                  <Plus size={13} /> Add product
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                {lineDetails.map((l) => {
+                  const available = getLineAvailable(l);
+                  return (
+                    <div
+                      key={l.lineId}
+                      className="border border-border rounded-[var(--radius)] p-3 bg-background/40"
+                    >
+                      <div className="grid grid-cols-[1fr_auto_auto] sm:grid-cols-[1fr_110px_110px_auto] gap-2 items-start">
+                        <select
+                          value={l.productId}
+                          onChange={(e) => updateLine(l.lineId, { productId: e.target.value })}
+                          className="w-full px-3 py-2 text-sm border border-border rounded-[var(--radius)] bg-white focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary col-span-3 sm:col-span-1"
+                        >
+                          {products.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name}
+                            </option>
+                          ))}
+                        </select>
+                        <input
+                          type="number"
+                          min="1"
+                          value={l.qty}
+                          onChange={(e) => updateLine(l.lineId, { qty: e.target.value })}
+                          placeholder="Qty"
+                          className="w-full px-3 py-2 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+                        />
+                        <div className="px-3 py-2 text-sm border border-border/50 rounded-[var(--radius)] bg-background font-mono text-muted whitespace-nowrap">
+                          {fmt(l.total)}
+                        </div>
+                        {lines.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => removeLine(l.lineId)}
+                            className="p-2 text-muted hover:text-danger hover:bg-danger/10 rounded-[var(--radius-sm)] transition-colors self-start"
+                          >
+                            <X size={15} />
+                          </button>
+                        )}
+                      </div>
+                      {form.agentId && l.productId && (
+                        <p className={`text-[11px] mt-1.5 ${available <= 0 ? "text-danger" : "text-muted"}`}>
+                          {available} box{available === 1 ? "" : "es"} available · unit price {fmt(l.unitPrice)}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
-            <div>
-              <label className="text-xs text-muted uppercase tracking-wide block mb-1.5">
-                Total Price
-              </label>
-              <div className="px-3.5 py-2.5 text-sm border border-primary/30 rounded-[var(--radius)] bg-primary/5 font-mono text-primary">
-                {fmt(totalPrice)}
+
+            <div className="sm:col-span-2 flex items-center justify-between p-3.5 border border-primary/30 rounded-[var(--radius)] bg-primary/5">
+              <div>
+                <div className="text-[11px] text-muted uppercase tracking-wide">Grand Total</div>
+                <div className="text-xs text-muted">{grandQty} boxes across {lines.length} product{lines.length === 1 ? "" : "s"}</div>
               </div>
+              <div className="text-lg font-mono text-primary">{fmt(grandTotal)}</div>
             </div>
+
             {saleType === "client" && (
               <div className="sm:col-span-2 text-xs text-secondary bg-secondary/10 border border-secondary/20 rounded-[var(--radius-sm)] px-3 py-2">
-                ⏳ Sales to existing clients are always recorded as a loan — record payments separately on the Payments page so each one is tracked clearly against its date.
+                Sales to existing clients are always recorded as a loan — record payments separately on the Payments page so each one is tracked clearly against its date.
               </div>
             )}
             {saleType === "walkin" && (
@@ -908,23 +1064,28 @@ const [saving, setSaving] = useState(false);
               </button>
               <button
                 onClick={handleSave}
-                className="flex-1 py-2.5 text-sm bg-primary text-white rounded-[var(--radius)] hover:bg-primary/90 transition-colors"
+                disabled={saving}
+                className="flex-1 py-2.5 text-sm bg-primary text-white rounded-[var(--radius)] hover:bg-primary/90 transition-colors disabled:opacity-60"
               >
-                {modal === "add" ? "Save Report" : "Update Report"}
+                {saving ? "Saving…" : modal === "add" ? "Save Report" : "Update Report"}
               </button>
             </div>
           </div>
         </Modal>
       )}
 
-      {confirmId && (
+      {confirmGroup && (
         <Confirm
-          message="Delete this report? The record will be permanently removed."
+          message={
+            confirmGroup.length > 1
+              ? `Delete this sale with ${confirmGroup.length} products? The records will be permanently removed.`
+              : "Delete this report? The record will be permanently removed."
+          }
           onConfirm={async () => {
-            await handleDelete(confirmId);
-            setConfirmId(null);
+            await handleDeleteGroup(confirmGroup);
+            setConfirmGroup(null);
           }}
-          onCancel={() => setConfirmId(null)}
+          onCancel={() => setConfirmGroup(null)}
         />
       )}
     </div>
