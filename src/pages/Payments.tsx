@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { Plus, Banknote, Receipt, Trash2 } from "lucide-react";
+import { Plus, Banknote, Receipt } from "lucide-react";
 import { useStore } from "../lib/store";
 import { supabase } from "../lib/supabase";
 import { fmt, fmtDate, today } from "../lib/utils";
@@ -63,8 +63,7 @@ export default function Payments() {
     state.products.find((p) => p.id === id)?.name ?? "—";
   const getClientName = (id: string) =>
     activeClients.find((c) => c.id === id)?.name ?? "—";
-  const getAgentName = (id?: string) =>
-    id ? activeAgents.find((a) => a.id === id)?.name ?? "—" : "—";
+
   const getBankName = (id?: string) =>
     id ? state.banks.find((b) => b.id === id)?.name ?? "—" : "—";
 
@@ -99,8 +98,10 @@ export default function Payments() {
     setReceiverName(state.user?.name ?? "");
   };
 
-  const handleConfirmPayment = async () => {
+  
+const handleConfirmPayment = async () => {
     if (!clientId || selectedReportIds.length === 0 || !amount || !state.user || !effectiveAgentId) return;
+    const user = state.user;
     const numAmount = Number(amount);
     if (numAmount <= 0) return;
 
@@ -134,7 +135,7 @@ export default function Payments() {
       mode,
       bank_id: mode === "bank" ? bankId || null : null,
       receiver_name: mode === "telephone" ? receiverName || null : null,
-      created_by: state.user.name,
+      created_by: user.name,
     }));
 
     const { data, error } = await supabase.from("payments").insert(payloads).select();
@@ -162,6 +163,14 @@ export default function Payments() {
       }),
     );
 
+    await supabase.from("activity_logs").insert({
+      actor_id: user.id,
+      actor_name: user.name,
+      action: "created",
+      entity_type: "payment",
+      entity_name: `${getClientName(clientId)} — ${fmt(amountToApply)} (${mode})`,
+    });
+
     Swal.fire({
       icon: "success",
       title: allocations.length > 1 ? `Payment recorded across ${allocations.length} dates` : "Payment recorded",
@@ -170,7 +179,6 @@ export default function Payments() {
     });
     resetPaymentForm();
   };
-
   /* ── Expense (depense) form state ─────────────────────────── */
   const [expName, setExpName] = useState("");
   const [expAmount, setExpAmount] = useState("");
@@ -209,6 +217,16 @@ export default function Payments() {
         createdBy: data.created_by,
       },
     });
+
+    await supabase.from("activity_logs").insert({
+      actor_id: state.user.id,
+      actor_name: state.user.name,
+      action: "created",
+      entity_type: "expense",
+      entity_id: data.id,
+      entity_name: `${data.name} — ${fmt(Number(data.amount))}`,
+    });
+
     setExpName("");
     setExpAmount("");
   };
@@ -344,9 +362,6 @@ export default function Payments() {
                           }}
                           className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30"
                         />
-                        <p className="text-[11px] text-muted mt-1">
-                          Max {fmt(selectedTotal)} across {selectedReportIds.length} selected date{selectedReportIds.length === 1 ? "" : "s"}
-                        </p>
                         <p className="text-[11px] text-muted mt-1">
                           Max {fmt(selectedTotal)} across {selectedReportIds.length} selected date{selectedReportIds.length === 1 ? "" : "s"}
                         </p>
@@ -515,10 +530,10 @@ export default function Payments() {
               <div className="py-16 text-center text-sm text-muted">No records yet</div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[820px]">
+                <table className="w-full min-w-[960px]">
                   <thead>
-                    <tr className="border-b border-border bg-background/50">
-                      {["Client / Expense", "Cash", "Bank", "Bank Name", "Mobile", "Receiver", "Depense", "Amount"].map((h) => (
+                        <tr className="border-b border-border bg-background/50">
+                          {["Client / Expense", "Cash", "Bank", "Bank Name", "Mobile", "Receiver", "Depense", "Amount", "Versaiment"].map((h) => (
                         <th key={h} className="text-left text-[10px] text-muted uppercase tracking-wide px-3 py-2.5 whitespace-nowrap">
                           {h}
                         </th>
@@ -533,11 +548,12 @@ export default function Payments() {
                       const dayBank = dayPayments.filter((p) => p.mode === "bank").reduce((s, p) => s + p.amount, 0);
                       const dayTel = dayPayments.filter((p) => p.mode === "telephone").reduce((s, p) => s + p.amount, 0);
                       const dayExp = dayExpenses.reduce((s, e) => s + e.amount, 0);
+                      const dayVersaiment = dayCash - dayExp;
 
                       return (
                         <FragmentDay key={date}>
                           <tr className="bg-accent/30">
-                            <td colSpan={8} className="px-3 py-1.5 text-xs font-semibold text-foreground">
+                            <td colSpan={9} className="px-3 py-1.5 text-xs font-semibold text-foreground">
                               {fmtDate(date)}
                             </td>
                           </tr>
@@ -549,6 +565,7 @@ export default function Payments() {
                               <td className="px-3 py-2 text-xs text-muted">{p.mode === "bank" ? getBankName(p.bankId) : "—"}</td>
                               <td className="px-3 py-2 text-xs font-mono text-secondary">{p.mode === "telephone" ? fmt(p.amount) : "—"}</td>
                               <td className="px-3 py-2 text-xs text-muted">{p.mode === "telephone" ? (p.receiverName || "—") : "—"}</td>
+                              <td className="px-3 py-2 text-xs text-muted">—</td>
                               <td className="px-3 py-2 text-xs text-muted">—</td>
                               <td className="px-3 py-2 text-xs text-muted">—</td>
                             </tr>
@@ -563,6 +580,7 @@ export default function Payments() {
                               <td className="px-3 py-2 text-xs text-muted">—</td>
                               <td className="px-3 py-2 text-xs text-foreground">{e.name}</td>
                               <td className="px-3 py-2 text-xs font-mono text-danger">{fmt(e.amount)}</td>
+                              <td className="px-3 py-2 text-xs text-muted">—</td>
                             </tr>
                           ))}
                           <tr className="border-b-2 border-border bg-accent/50 font-semibold">
@@ -574,6 +592,11 @@ export default function Payments() {
                             <td className="px-3 py-2"></td>
                             <td className="px-3 py-2"></td>
                             <td className="px-3 py-2 text-xs font-mono text-danger">{fmt(dayExp)}</td>
+                            <td className="px-3 py-2 sticky right-0 bg-accent/50">
+                              <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-white px-3 py-1 rounded-full bg-gradient-to-r from-primary via-emerald-500 to-primary bg-[length:200%_auto] shadow-sm shadow-primary/30">
+                                💰 {fmt(dayVersaiment)}
+                              </span>
+                            </td>
                           </tr>
                         </FragmentDay>
                       );

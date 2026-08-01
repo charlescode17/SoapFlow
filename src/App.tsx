@@ -12,9 +12,12 @@ import StockMovement from "./pages/StockMovement";
 import AgentReports from "./pages/AgentReports";
 import Loans from "./pages/Loans";
 import Payments from "./pages/Payments";
+import Versaiment from "./pages/Versaiment";
 import Report from "./pages/Report";
 import Settings from "./pages/Settings";
 import { normalizeRole, type Page } from "./lib/types";
+
+const turboActive = typeof window !== "undefined" && !!sessionStorage.getItem("turbo_origin_session");
 
 const ROLE_ALLOWED_PAGES: Record<string, Page[]> = {
   manager: [
@@ -26,10 +29,11 @@ const ROLE_ALLOWED_PAGES: Record<string, Page[]> = {
     "reports",
     "loans",
     "payments",
+    "versaiment",
     "report",
     "settings",
   ],
-  marketing_agent: ["dashboard", "clients", "reports", "loans", "payments", "report", "settings"],
+  marketing_agent: ["dashboard", "clients", "reports", "loans", "payments", "versaiment", "report", "settings"],
   stock_agent: ["dashboard", "products", "stock", "report", "settings"],
 };
 
@@ -64,20 +68,26 @@ function AppInner() {
     dispatch({ type: "SET_USER", payload: null });
   };
 
-  return (
+return (
     <>
-        {transitionPhase !== "hidden" && <SessionTransition phase={transitionPhase} />}
+      {transitionPhase !== "hidden" && <SessionTransition phase={transitionPhase} />}
+      {turboActive && (
+        <div className="bg-danger text-white text-center text-xs font-semibold py-2 px-4">
+          ⚡ Turbo Mode active — you're acting as {state.user?.name}. Go to Settings → Turbo Mode to exit.
+        </div>
+      )}
       <Layout page={page} setPage={setPage} user={state.user} onLogout={logout}>
-      {page === "dashboard" && <Dashboard setPage={setPage} />}
-      {page === "agents" && <Agents />}
-      {page === "products" && <Products />}
-      {page === "clients" && <Clients />}
-      {page === "stock" && <StockMovement />}
-      {page === "reports" && <AgentReports />}
-      {page === "loans" && <Loans setPage={setPage} />}
-      {page === "payments" && <Payments />}
-      {page === "report" && <Report />}
-      {page === "settings" && <Settings />}
+        {page === "dashboard" && <Dashboard setPage={setPage} />}
+        {page === "agents" && <Agents />}
+        {page === "products" && <Products />}
+        {page === "clients" && <Clients />}
+        {page === "stock" && <StockMovement />}
+        {page === "reports" && <AgentReports />}
+        {page === "loans" && <Loans setPage={setPage} />}
+        {page === "payments" && <Payments />}
+        {page === "versaiment" && <Versaiment />}
+        {page === "report" && <Report />}
+        {page === "settings" && <Settings />}
       </Layout>
     </>
   );

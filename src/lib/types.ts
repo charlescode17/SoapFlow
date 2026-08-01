@@ -138,3 +138,13 @@ export interface AppState {
   banks: Bank[];
   expenses: Expense[]; // NEW
 }
+
+export interface Versaiment {
+  id: string;
+  agentId: string;
+  date: string;
+  amount: number;
+  status: "pending" | "approved";
+  approvedBy?: string;
+  approvedAt?: string;
+}

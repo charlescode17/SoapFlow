@@ -133,6 +133,14 @@ export default function Agents() {
       return;
     }
 
+    await supabase.from("activity_logs").insert({
+      actor_id: state.user?.id,
+      actor_name: state.user?.name ?? "unknown",
+      action: "created",
+      entity_type: "user",
+      entity_name: addForm.name.trim(),
+    });
+
     closeModal();
     fetchAgents();
   }

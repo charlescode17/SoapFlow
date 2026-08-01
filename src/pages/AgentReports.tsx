@@ -405,6 +405,15 @@ export default function AgentReports() {
         await supabase.from("agent_reports").update({ deleted: true }).eq("id", id);
         dispatch({ type: "DELETE_AGENT_REPORT", id });
       }
+
+      await supabase.from("activity_logs").insert({
+        actor_id: state.user.id,
+        actor_name: state.user.name,
+        action: "updated",
+        entity_type: "agent_report",
+        entity_id: editingGroupKey,
+        entity_name: `${buyerLabel} — ${lineDetails.length} product${lineDetails.length === 1 ? "" : "s"} (${grandQty} boxes)`,
+      });
     }
 
     setSaving(false);
@@ -419,6 +428,19 @@ export default function AgentReports() {
         return;
       }
       dispatch({ type: "DELETE_AGENT_REPORT", id: l.id });
+    }
+
+    if (state.user) {
+      const first = groupLines[0];
+      const client = clients.find((c) => c.id === first.clientId);
+      await supabase.from("activity_logs").insert({
+        actor_id: state.user.id,
+        actor_name: state.user.name,
+        action: "deleted",
+        entity_type: "agent_report",
+        entity_id: groupKeyOf(first),
+        entity_name: `${client?.name ?? first.customerName ?? "Walk-in customer"} — ${groupLines.length} product${groupLines.length === 1 ? "" : "s"}`,
+      });
     }
   };
 

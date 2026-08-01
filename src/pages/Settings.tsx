@@ -17,6 +17,7 @@ import {
   LogIn,
   LogOut,
   Lock,
+  Zap,
 } from "lucide-react";
 import { useStore } from "../lib/store";
 import { Confirm } from "../components/Confirm";
@@ -33,7 +34,8 @@ type Section =
   | "roles"
   | "users"
   | "logs"
-  | "security";
+  | "security"
+  | "turbo";
 
 const THEMES: { id: Theme; label: string; icon: React.ElementType }[] = [
   { id: "light", label: "Light", icon: Sun },
@@ -56,6 +58,7 @@ const SECTIONS_ALL: { id: Section; label: string; icon: React.ElementType }[] = 
   { id: "users", label: "Users", icon: Users },
   { id: "logs", label: "Activity Logs", icon: History },
   { id: "security", label: "Security", icon: Lock },
+  { id: "turbo", label: "Turbo Mode", icon: Zap },
 ];
 
 const LIMITED_SECTION_IDS: Section[] = ["account", "appearance", "language"];
@@ -115,6 +118,7 @@ export default function Settings() {
 
   useEffect(() => {
     if (section === "users" && canEdit) fetchUsers();
+    if (section === "turbo" && canEdit) fetchUsers();
     if (section === "logs" && canEdit) fetchLogs();
     if (section === "security" && canEdit) fetchPinStatus();
     if (section === "account" && state.user) {
@@ -248,6 +252,101 @@ export default function Settings() {
   const [pinConfirm, setPinConfirm] = useState("");
   const [pinError, setPinError] = useState("");
   const [pinLoading, setPinLoading] = useState(false);
+  // --- Turbo mode (login as another user) ---
+  const [turboLoading, setTurboLoading] = useState<string | null>(null);
+  const turboActive =
+    typeof window !== "undefined" && !!sessionStorage.getItem("turbo_origin_session");
+  const turboOriginName =
+    typeof window !== "undefined"
+      ? (JSON.parse(sessionStorage.getItem("turbo_origin_user") || "null")?.name as
+          | string
+          | undefined)
+      : undefined;
+
+  async function handleEnterTurbo(target: ProfileRow) {
+    if (!state.user || target.id === state.user.id) return;
+
+    const confirmed = await Swal.fire({
+      icon: "warning",
+      title: `Enter Turbo Mode as ${target.name}?`,
+      text: "You'll act as this user until you exit turbo mode. Everything you do will be logged.",
+      showCancelButton: true,
+      confirmButtonText: "Enter Turbo Mode",
+      confirmButtonColor: "#dc2626",
+    });
+    if (!confirmed.isConfirmed) return;
+
+    setTurboLoading(target.id);
+
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) {
+      setTurboLoading(null);
+      return;
+    }
+
+    const { data, error } = await supabase.functions.invoke("impersonate-user", {
+      body: { userId: target.id },
+    });
+
+    if (error || data?.error) {
+      setTurboLoading(null);
+      Swal.fire({
+        icon: "error",
+        title: "Could not enter turbo mode",
+        text: data?.error || error?.message || "Something went wrong.",
+        confirmButtonColor: "#2E9E8F",
+      });
+      return;
+    }
+
+    // Stash the manager's real session + identity so we can restore it later.
+    sessionStorage.setItem("turbo_origin_session", JSON.stringify(session));
+    sessionStorage.setItem("turbo_origin_user", JSON.stringify(state.user));
+
+    await supabase.from("activity_logs").insert({
+      actor_id: state.user.id,
+      actor_name: state.user.name,
+      action: "entered_turbo",
+      entity_type: "user",
+      entity_id: target.id,
+      entity_name: target.name,
+    });
+
+    await supabase.auth.setSession({
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+    });
+
+    window.location.reload();
+  }
+
+  async function handleExitTurbo() {
+    const originSessionRaw = sessionStorage.getItem("turbo_origin_session");
+    const originUserRaw = sessionStorage.getItem("turbo_origin_user");
+    if (!originSessionRaw || !originUserRaw) return;
+
+    const originSession = JSON.parse(originSessionRaw);
+    const originUser = JSON.parse(originUserRaw);
+
+    await supabase.from("activity_logs").insert({
+      actor_id: originUser.id,
+      actor_name: originUser.name,
+      action: "exited_turbo",
+      entity_type: "user",
+      entity_id: state.user?.id,
+      entity_name: state.user?.name,
+    });
+
+    await supabase.auth.setSession({
+      access_token: originSession.access_token,
+      refresh_token: originSession.refresh_token,
+    });
+
+    sessionStorage.removeItem("turbo_origin_session");
+    sessionStorage.removeItem("turbo_origin_user");
+
+    window.location.reload();
+  }
 
   async function fetchPinStatus() {
     const { data } = await supabase.rpc("security_pin_is_set");
@@ -1525,6 +1624,73 @@ export default function Settings() {
                         ? "Update PIN"
                         : "Set PIN"}
                   </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {section === "turbo" && (
+            <div className="bg-card border border-border rounded-[var(--radius-lg)] overflow-hidden">
+              <div className="px-5 sm:px-6 py-4 border-b border-border flex items-center gap-2">
+                <Zap size={16} className="text-muted flex-shrink-0" />
+                <h3 className="text-sm font-semibold text-foreground">
+                  Turbo Mode — Log In As Another User
+                </h3>
+              </div>
+
+              {turboActive && (
+                <div className="mx-5 sm:mx-6 mt-4 flex items-center justify-between gap-3 text-xs bg-danger/10 text-danger border border-danger/20 rounded-[var(--radius)] px-3 py-2.5">
+                  <span>
+                    You're currently in Turbo Mode as <b>{state.user?.name}</b>
+                    {turboOriginName ? ` (originally ${turboOriginName})` : ""}.
+                  </span>
+                  <button
+                    onClick={handleExitTurbo}
+                    className="font-semibold px-3 py-1.5 rounded-[var(--radius-sm)] bg-danger text-white hover:bg-danger/90 flex-shrink-0"
+                  >
+                    Exit Turbo Mode
+                  </button>
+                </div>
+              )}
+
+              <p className="px-5 sm:px-6 pt-4 text-xs text-muted">
+                Pick a user to act as them. Entering and exiting is logged, so you
+                can always see when a turbo session started and ended in Activity Logs.
+              </p>
+
+              {!canEdit ? (
+                <div className="py-10 text-center text-sm text-muted">
+                  Only managers can use Turbo Mode.
+                </div>
+              ) : usersLoading ? (
+                <div className="py-10 text-center text-sm text-muted">Loading…</div>
+              ) : (
+                <div className="divide-y divide-border/50 mt-2">
+                  {users
+                    .filter((u) => u.id !== state.user?.id && u.is_active)
+                    .map((u) => (
+                      <div
+                        key={u.id}
+                        className="flex items-center justify-between px-5 sm:px-6 py-4 hover:bg-accent/30 transition-colors gap-3"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm font-medium text-foreground truncate">
+                            {u.name}
+                          </div>
+                          <div className="text-xs text-muted truncate">
+                            {u.email} · {u.role}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleEnterTurbo(u)}
+                          disabled={turboLoading === u.id || turboActive}
+                          className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-[var(--radius-sm)] bg-primary/10 text-primary hover:bg-primary/20 transition-colors disabled:opacity-50 flex-shrink-0"
+                        >
+                          <Zap size={12} />
+                          {turboLoading === u.id ? "Entering…" : "Turbo as this user"}
+                        </button>
+                      </div>
+                    ))}
                 </div>
               )}
             </div>

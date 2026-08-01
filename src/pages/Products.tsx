@@ -27,12 +27,12 @@ function currentStock(
 
 const EMPTY = {
   name: "",
-  unitName: "piece",
+  unitName: "",
   unitPrice: 0,
   hasBoxing: false,
-  piecesPerBox: 20,
+  piecesPerBox: 0,
   boxPrice: 0,
-  lowStockThreshold: 100,
+  lowStockThreshold: 0,
 };
 
 type ViewMode = "list" | "grid";
@@ -515,9 +515,10 @@ export default function Products() {
             <div>
               <label className="text-xs font-semibold text-muted uppercase tracking-wide block mb-1.5">Unit Name</label>
               <input
-                // value={form.unitName}
-                onChange={(e) => setForm((f) => ({ ...f, unitName: e.target.value }))}
-                placeholder="e.g. bar, bottle, piece"
+                type="number"
+                value={form.unitPrice === 0 ? "" : form.unitPrice}
+                onChange={(e) => setForm((f) => ({ ...f, unitPrice: e.target.value === "" ? 0 : Number(e.target.value) }))}
+                placeholder="150"
                 className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
               />
             </div>
@@ -548,9 +549,9 @@ export default function Products() {
                   <label className="text-xs font-semibold text-muted uppercase tracking-wide block mb-1.5">{form.unitName || "Units"} per Box</label>
                   <input
                     type="number"
-                    // value={form.piecesPerBox === 0 ? "" : form.piecesPerBox}
+                    value={form.piecesPerBox === 0 ? "" : form.piecesPerBox}
                     onChange={(e) => setForm((f) => ({ ...f, piecesPerBox: e.target.value === "" ? 0 : Number(e.target.value) }))}
-                    placeholder=""
+                    placeholder="e.g. 20"
                     className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
                   />
                 </div>
@@ -573,9 +574,9 @@ export default function Products() {
               </label>
               <input
                 type="number"
-                // value={form.lowStockThreshold}
-                onChange={(e) => setForm((f) => ({ ...f, lowStockThreshold: Number(e.target.value) }))}
-                placeholder=""
+                value={form.lowStockThreshold === 0 ? "" : form.lowStockThreshold}
+                onChange={(e) => setForm((f) => ({ ...f, lowStockThreshold: e.target.value === "" ? 0 : Number(e.target.value) }))}
+                placeholder="e.g. 100"
                 className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
               />
             </div>

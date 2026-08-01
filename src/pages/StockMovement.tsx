@@ -83,6 +83,33 @@ export default function StockMovement() {
 
   const getProductName = (prodId: string) =>
     products.find((p) => p.id === prodId)?.name ?? "Unknown Product";
+  const getAgentRemaining = (agentId: string, productId: string) => {
+    if (!agentId || !productId) return 0;
+    const dispatched = state.stockMovements
+      .filter(
+        (m) =>
+          m.type === "marketing_agent" &&
+          m.agentId === agentId &&
+          m.productId === productId &&
+          !m.isReturn,
+      )
+      .reduce((s, m) => s + m.stockOut, 0);
+    const returned = state.stockMovements
+      .filter(
+        (m) =>
+          m.type === "marketing_agent" &&
+          m.agentId === agentId &&
+          m.productId === productId &&
+          m.isReturn,
+      )
+      .reduce((s, m) => s + m.stockIn, 0);
+    const distributed = state.agentReports
+      .filter(
+        (r) => !r.deleted && r.agentId === agentId && r.productId === productId,
+      )
+      .reduce((s, r) => s + r.qty, 0);
+    return parseFloat((dispatched - returned - distributed).toFixed(3));
+  };
 
   const addItemRow = () => {
     setItems((prev) => [
@@ -130,6 +157,49 @@ export default function StockMovement() {
     }
 
     const isStockIn = commonForm.type === "production" || commonForm.isReturn;
+    // 🔁 Return quantity check — agent can't return more than what they're holding
+    if (commonForm.type === "marketing_agent" && commonForm.isReturn) {
+      const overReturnLines: string[] = [];
+
+      for (const item of validItems) {
+        const qty = parseFloat(item.qty);
+        const prod = products.find((p) => p.id === item.productId);
+        const piecesPerBox = prod?.piecesPerBox ?? prod?.qtyPerBox ?? null;
+
+        const boxesQty =
+          item.unit === "piece"
+            ? piecesPerBox && piecesPerBox > 0
+              ? parseFloat((qty / piecesPerBox).toFixed(3))
+              : qty
+            : qty;
+
+        const remaining = getAgentRemaining(commonForm.agentId, item.productId);
+
+        if (boxesQty > remaining) {
+          overReturnLines.push(
+            `<li style="margin-bottom:4px;"><b>${prod?.name ?? "Unknown Product"}</b>: trying to return <b>${boxesQty}</b> boxes, agent only has <b>${remaining}</b> boxes left</li>`,
+          );
+        }
+      }
+
+      if (overReturnLines.length > 0) {
+        Swal.fire({
+          icon: "error",
+          title: "Return Exceeds Agent Stock",
+          html: `
+            <div style="text-align:left; font-size:13px;">
+              <p>The following product(s) can't be returned as entered:</p>
+              <ul style="margin:10px 0; padding-left:18px;">
+                ${overReturnLines.join("")}
+              </ul>
+              <p>An agent can't return more than what they currently have.</p>
+            </div>
+          `,
+          confirmButtonColor: "#dc2626",
+        });
+        return;
+      }
+    }
 
     // 🚨 Stock availability check — only applies to stock-out movements
     if (!isStockIn) {
@@ -278,6 +348,14 @@ export default function StockMovement() {
           },
         });
       }
+
+      await supabase.from("activity_logs").insert({
+        actor_id: state.user?.id,
+        actor_name: state.user?.name ?? "unknown",
+        action: commonForm.isReturn ? "returned" : "created",
+        entity_type: "stock_movement",
+        entity_name: `${validItems.length} product${validItems.length === 1 ? "" : "s"} — ${movementLabel(commonForm.type)}${commonForm.isReturn ? " (Return)" : ""}`,
+      });
 
       Swal.fire({
         icon: "success",
@@ -616,6 +694,36 @@ export default function StockMovement() {
                         }
                         className="w-full px-3 py-2 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30"
                       />
+                      {commonForm.type === "marketing_agent" &&
+                        commonForm.isReturn &&
+                        commonForm.agentId && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const remaining = getAgentRemaining(
+                                commonForm.agentId,
+                                item.productId,
+                              );
+                              const remainingForUnit =
+                                item.unit === "piece" && piecesPerBox
+                                  ? remaining * piecesPerBox
+                                  : remaining;
+                              updateItemRow(
+                                item.id,
+                                "qty",
+                                remainingForUnit.toString(),
+                              );
+                            }}
+                            className="mt-1 text-[11px] text-primary hover:underline"
+                          >
+                            Return all (
+                            {getAgentRemaining(
+                              commonForm.agentId,
+                              item.productId,
+                            )}{" "}
+                            boxes left)
+                          </button>
+                        )}
                     </div>
 
                     {/* Delete row */}

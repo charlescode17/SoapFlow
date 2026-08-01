@@ -630,19 +630,22 @@ const monthlyData = getLastMonths(6).map(({ key, label }) => {
   }
 
   return (
-    <div className="p-8 max-w-7xl">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-7xl">
       {/* Header */}
-      <div className="mb-8">
-        <div className="h-4 mb-2">
-          <span className="text-[11px] font-semibold uppercase tracking-widest text-primary/70">
-            {eyebrow}
-            <span className="animate-pulse">|</span>
-          </span>
+      <div className="relative overflow-hidden rounded-[var(--radius-lg)] bg-primary text-white p-5 sm:p-7 mb-6 lg:mb-8 shadow-lg">
+        <div className="pointer-events-none absolute -right-10 -top-14 w-48 h-48 rounded-full bg-white/10" />
+        <div className="pointer-events-none absolute -right-28 top-6 w-64 h-64 rounded-full bg-white/[0.06]" />
+        <div className="relative">
+          <div className="h-4 mb-2">
+            <span className="text-[11px] font-semibold uppercase tracking-widest text-white/70">
+              {eyebrow}
+              <span className="animate-pulse">|</span>
+            </span>
+          </div>
+          <h1 className="text-xl sm:text-2xl font-bold">{greeting}, {state.user?.name.split(' ')[0]} 👋</h1>
+          <p className="text-white/80 text-sm mt-1">{dateStr}</p>
         </div>
-        <h1 className="text-2xl font-bold text-foreground">{greeting}, {state.user?.name.split(' ')[0]} 👋</h1>
-        <p className="text-muted text-sm mt-1">{dateStr}</p>
       </div>
-
       {/* Low stock alert */}
       {lowStockProducts.length > 0 && (
         <div className="mb-6 bg-secondary/10 border border-secondary/30 rounded-[var(--radius)] px-4 py-3 flex items-center gap-3 animate-in fade-in duration-300">
