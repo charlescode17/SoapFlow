@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   CheckCircle2,
   Clock,
@@ -27,6 +27,14 @@ export default function Versaiment() {
   const effectiveAgentId = isManager ? pickedAgentId : state.user?.id ?? "";
 
   const { map, setRecord } = useVersaimentState();
+
+  const effectiveAgentName = isManager
+    ? activeAgents.find((a) => a.id === pickedAgentId)?.name ?? ""
+    : state.user?.name ?? "";
+  const [madeBy, setMadeBy] = useState(effectiveAgentName);
+  useEffect(() => {
+    setMadeBy(effectiveAgentName);
+  }, [effectiveAgentName]);
 
   const myPayments = state.payments.filter((p) => p.agentId === effectiveAgentId);
   const myExpenses = state.expenses.filter((e) => e.agentId === effectiveAgentId);
@@ -72,6 +80,7 @@ export default function Versaiment() {
       approved: existing?.approved ?? false,
       versaimentDate: existing?.versaimentDate,
       source,
+      madeBy: existing?.madeBy,
     });
   };
 
@@ -95,6 +104,7 @@ export default function Versaiment() {
         approved: true,
         versaimentDate,
         source: sourceFor(d),
+        madeBy: madeBy.trim() || effectiveAgentName,
       });
     });
     setSelected([]);
@@ -102,9 +112,11 @@ export default function Versaiment() {
 
   const undoApproval = (date: string) => {
     const d = days.find((dd) => dd.date === date);
+    const existing = recordFor(date);
     setRecord(keyFor(effectiveAgentId, date), {
       approved: false,
       source: d ? sourceFor(d) : "cash",
+      madeBy: existing?.madeBy,
     });
   };
 
@@ -163,6 +175,14 @@ export default function Versaiment() {
             {selected.length} day{selected.length > 1 ? "s" : ""} selected · {fmt(selectedTotal)}
           </span>
           <div className="flex items-center gap-2 ml-auto flex-wrap">
+            <label className="text-[11px] text-white/80">Made by</label>
+            <input
+              type="text"
+              value={madeBy}
+              onChange={(e) => setMadeBy(e.target.value)}
+              placeholder={effectiveAgentName}
+              className="px-2.5 py-1.5 text-xs rounded-[var(--radius-sm)] border-0 text-foreground"
+            />
             <label className="text-[11px] text-white/80">Versaiment date</label>
             <input
               type="date"
@@ -310,6 +330,7 @@ export default function Versaiment() {
                       <div className="text-[11px] text-muted mb-4">
                         via {sourceFor(d) === "cash" ? "Cash" : "Mobile Money"}
                         {record?.versaimentDate && ` · versed ${fmtDate(record.versaimentDate)}`}
+                        {record?.madeBy && ` · by ${record.madeBy}`}
                       </div>
 
                       <button
@@ -351,6 +372,7 @@ export default function Versaiment() {
               <div className="text-xs text-white/80 mt-1">
                 via {sourceFor(detailDay) === "cash" ? "Cash" : "Mobile Money"}
                 {detailRecord?.approved ? " · Approved" : " · Pending"}
+                {detailRecord?.madeBy && ` · by ${detailRecord.madeBy}`}
               </div>
             </div>
 

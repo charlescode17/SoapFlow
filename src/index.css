@@ -25,6 +25,23 @@
   --radius-sm: 4px;
 }
 
+.dark {
+  --color-background: #101513;
+  --color-foreground: #F0F3F2;
+  --color-card: #182120;
+  --color-card-foreground: #F0F3F2;
+  --color-primary: #2E9E8F;
+  --color-primary-foreground: #FFFFFF;
+  --color-secondary: #D99A3D;
+  --color-secondary-foreground: #1B2321;
+  --color-success: #3FA66B;
+  --color-danger: #E07A6B;
+  --color-sidebar: #0B0F0E;
+  --color-muted: #8B9B97;
+  --color-border: #26302D;
+  --color-accent: #1B2B28;
+}
+
 body {
   font-family: var(--font-sans);
   background: var(--color-background);

@@ -4,6 +4,7 @@ export interface VersaimentRecord {
   approved: boolean;
   versaimentDate?: string;
   source: "cash" | "telephone";
+  madeBy?: string;
 }
 
 type VersaimentMap = Record<string, VersaimentRecord>;

@@ -5,17 +5,18 @@ import {
 } from 'recharts'
 import { useStore } from '../lib/store'
 import { useTypewriter } from '../lib/useTypewriter'
+import { useI18n } from '../lib/i18n'
 import { fmt, fmtDate } from '../lib/utils'
 import { normalizeRole, type Page } from '../lib/types'
 
-function getLastMonths(n: number) {
+function getLastMonths(n: number, locale: string) {
   const out: { key: string; label: string }[] = []
   const now = new Date()
   for (let i = n - 1; i >= 0; i--) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
     out.push({
       key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
-      label: d.toLocaleDateString('en-GB', { month: 'short' }),
+      label: d.toLocaleDateString(locale, { month: 'short' }),
     })
   }
   return out
@@ -29,22 +30,37 @@ function currentStock(movements: ReturnType<typeof useStore>['state']['stockMove
   return filtered.length ? filtered[filtered.length - 1].balance : 0
 }
 
-const EYEBROW_PHRASES = [
-  'Every bar.\nEvery box.\nEvery client.',
-  'Track stock\nin real time.',
-  'Manage your\nmarketing agents.',
-  'Generate reports\nin one click.',
-]
+const EYEBROW_PHRASES: Record<string, string[]> = {
+  en: [
+    'Every bar.\nEvery box.\nEvery client.',
+    'Track stock\nin real time.',
+    'Manage your\nmarketing agents.',
+    'Generate reports\nin one click.',
+  ],
+  fr: [
+    'Chaque barre.\nChaque boîte.\nChaque client.',
+    'Suivez le stock\nen temps réel.',
+    'Gérez vos\nagents marketing.',
+    'Générez des rapports\nen un clic.',
+  ],
+  rw: [
+    'Buri barre.\nBuri gasanduku.\nBuri mukiriya.',
+    'Kurikirana ibicuruzwa\nmu gihe nyacyo.',
+    'Tegura ababoneka\nbwamamaza.',
+    'Tunganya raporo\nmu gakoro kamwe.',
+  ],
+}
 
 export default function Dashboard({ setPage }: Props) {
   const { state } = useStore()
+  const { lang, t } = useI18n()
   const { stockMovements = [], agentReports = [], payments = [], products = [], clients = [], agents = [] } = state
 
-  const eyebrow = useTypewriter(EYEBROW_PHRASES, 45, 25, 1600).split('\n').join(' ')
+  const eyebrow = useTypewriter(EYEBROW_PHRASES[lang], 45, 25, 1600).split('\n').join(' ')
 
   const hour = new Date().getHours()
-  const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening'
-  const dateStr = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+  const greeting = hour < 12 ? t('good_morning') : hour < 18 ? t('good_afternoon') : t('good_evening')
+  const dateStr = new Date().toLocaleDateString(lang, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
 
   const userRole = normalizeRole(state.user?.role)
   const isStockAgent = userRole === 'stock_agent'
@@ -112,9 +128,9 @@ export default function Dashboard({ setPage }: Props) {
     const recentMoves = [...stockMovements].sort((a,b) => b.date.localeCompare(a.date)).slice(0, 8)
 
     const kpis = [
-      { label: 'Total Stock In',  value: `+${totalStockIn.toLocaleString()}`,  sub: 'all time boxes', color: '#3FA66B', icon: TrendingUp },
-      { label: 'Total Stock Out', value: `-${totalStockOut.toLocaleString()}`, sub: 'all time boxes', color: '#E05C5C', icon: TrendingDown },
-      { label: 'This Month Net',  value: (monthlyNet >= 0 ? '+' : '') + monthlyNet.toLocaleString(), sub: 'net change', color: '#D99A3D', icon: DollarSign },
+      { label: 'total_stock_in',  value: `+${totalStockIn.toLocaleString()}`,  sub: 'all_time_boxes', color: '#3FA66B', icon: TrendingUp },
+      { label: 'total_stock_out', value: `-${totalStockOut.toLocaleString()}`, sub: 'all_time_boxes', color: '#E05C5C', icon: TrendingDown },
+      { label: 'this_month_net',  value: (monthlyNet >= 0 ? '+' : '') + monthlyNet.toLocaleString(), sub: 'net_change', color: '#D99A3D', icon: DollarSign },
     ]
 
     const PRODUCT_COLORS = ['#2E9E8F','#3FA66B','#D99A3D','#7C6FE0','#E05C5C','#5B9BD5']
@@ -131,18 +147,18 @@ export default function Dashboard({ setPage }: Props) {
         <div className="mb-6 lg:mb-8">
           <div className="flex items-center justify-between mb-3">
             <div>
-              <h2 className="text-sm font-semibold text-foreground">Current Inventory</h2>
-              <p className="text-xs text-muted mt-0.5">Live stock from database</p>
+              <h2 className="text-sm font-semibold text-foreground">{t('current_inventory')}</h2>
+              <p className="text-xs text-muted mt-0.5">{t('live_stock_from_database')}</p>
             </div>
             <div className="text-right">
-              <div className="text-xs text-muted uppercase tracking-wide">Total Stock Value</div>
+              <div className="text-xs text-muted uppercase tracking-wide">{t('total_stock_value')}</div>
               <div className="text-base font-bold text-foreground">{totalStockValue.toLocaleString()} RWF</div>
             </div>
           </div>
 
           {activeProducts.length === 0 ? (
             <div className="bg-card border border-border rounded-[var(--radius-lg)] p-8 text-center text-sm text-muted">
-              No products found. Add products first.
+              {t('no_products_found_add_products_first')}
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
@@ -161,7 +177,7 @@ export default function Dashboard({ setPage }: Props) {
                         <span className="text-sm font-semibold text-foreground truncate">{item.product.name}</span>
                       </div>
                       {isLow && (
-                        <span className="ml-2 flex-shrink-0 text-[10px] font-medium bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">Low</span>
+                        <span className="ml-2 flex-shrink-0 text-[10px] font-medium bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">{t('low_stock')}</span>
                       )}
                     </div>
 
@@ -170,23 +186,23 @@ export default function Dashboard({ setPage }: Props) {
                       {item.piecesPerBox ? (
                         <>
                           <div className="flex items-baseline justify-between">
-                            <span className="text-xs text-muted">Full boxes</span>
+                            <span className="text-xs text-muted">{t('full_boxes')}</span>
                             <span className="text-sm font-bold text-foreground">{item.fullBoxes.toLocaleString()}</span>
                           </div>
                           <div className="flex items-baseline justify-between">
-                            <span className="text-xs text-muted">Leftover pieces</span>
+                            <span className="text-xs text-muted">{t('leftover_pieces')}</span>
                             <span className="text-sm font-bold text-foreground">
                               {item.leftoverPcs > 0 ? item.leftoverPcs : '—'}
                             </span>
                           </div>
                           <div className="text-[10px] text-muted/70">
-                            {item.piecesPerBox} pcs / box
-                            {item.totalPieces != null && ` · ${item.totalPieces.toLocaleString()} pcs total`}
+                            {item.piecesPerBox} {t('pcs_per_box')}
+                            {item.totalPieces != null && ` · ${item.totalPieces.toLocaleString()} ${t('pcs_total')}`}
                           </div>
                         </>
                       ) : (
                         <div className="flex items-baseline justify-between">
-                          <span className="text-xs text-muted">Boxes in stock</span>
+                          <span className="text-xs text-muted">{t('boxes_in_stock')}</span>
                           <span className="text-sm font-bold text-foreground">{item.balanceBoxes.toLocaleString()}</span>
                         </div>
                       )}
@@ -195,7 +211,7 @@ export default function Dashboard({ setPage }: Props) {
                     {/* Divider */}
                     <div className="border-t border-border/60 pt-2.5">
                       <div className="flex items-center justify-between">
-                        <span className="text-[11px] text-muted">Stock value</span>
+                        <span className="text-[11px] text-muted">{t('stock_value')}</span>
                         <span className="text-xs font-semibold" style={{ color }}>
                           {item.stockValue.toLocaleString()} RWF
                         </span>
@@ -220,13 +236,13 @@ export default function Dashboard({ setPage }: Props) {
               {/* Total summary card */}
               <div className="bg-foreground/5 border border-border rounded-[var(--radius-lg)] p-4 sm:p-5 flex flex-col justify-between hover:shadow-md transition-shadow duration-200">
                 <div>
-                  <div className="text-[10px] text-muted uppercase tracking-wide mb-1">All Products</div>
-                  <div className="text-sm font-semibold text-foreground mb-3">Total Inventory Value</div>
+                  <div className="text-[10px] text-muted uppercase tracking-wide mb-1">{t('all_products')}</div>
+                  <div className="text-sm font-semibold text-foreground mb-3">{t('total_inventory_value')}</div>
                 </div>
                 <div>
                   <div className="text-xl font-bold text-foreground">{totalStockValue.toLocaleString()}</div>
                   <div className="text-xs text-muted mt-0.5">RWF</div>
-                  <div className="text-[11px] text-muted mt-2">{activeProducts.length} product{activeProducts.length !== 1 ? 's' : ''} tracked</div>
+                  <div className="text-[11px] text-muted mt-2">{activeProducts.length} {t('products_tracked')}</div>
                 </div>
               </div>
             </div>
@@ -241,8 +257,8 @@ export default function Dashboard({ setPage }: Props) {
                 <kpi.icon size={15} style={{ color: kpi.color }} />
               </div>
               <div className="text-base sm:text-lg font-bold text-foreground leading-tight">{kpi.value}</div>
-              <div className="text-[10px] text-muted mt-0.5">{kpi.label}</div>
-              <div className="text-[9px] text-muted/60">{kpi.sub}</div>
+              <div className="text-[10px] text-muted mt-0.5">{t(kpi.label)}</div>
+              <div className="text-[9px] text-muted/60">{t(kpi.sub)}</div>
             </div>
           ))}
         </div>
@@ -251,10 +267,10 @@ export default function Dashboard({ setPage }: Props) {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 mb-6 lg:mb-8">
           {/* Stock In vs Out area chart */}
           <div className="lg:col-span-2 bg-card border border-border rounded-[var(--radius-lg)] p-4 sm:p-6 hover:shadow-md transition-shadow duration-200">
-            <h3 className="text-sm font-semibold text-foreground mb-0.5">Stock Movement Trend</h3>
-            <p className="text-xs text-muted mb-4">Daily In vs Out (last 30 days)</p>
+            <h3 className="text-sm font-semibold text-foreground mb-0.5">{t('stock_movement_trend')}</h3>
+            <p className="text-xs text-muted mb-4">{t('daily_in_vs_out_last_30_days')}</p>
             {trendData.length === 0 ? (
-              <div className="flex items-center justify-center h-48 text-sm text-muted">No movement data yet</div>
+              <div className="flex items-center justify-center h-48 text-sm text-muted">{t('no_movement_data_yet')}</div>
             ) : (
               <ResponsiveContainer width="100%" height={220}>
                 <AreaChart data={trendData} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
@@ -283,10 +299,10 @@ export default function Dashboard({ setPage }: Props) {
 
           {/* Per-product balance bar chart */}
           <div className="bg-card border border-border rounded-[var(--radius-lg)] p-4 sm:p-6 hover:shadow-md transition-shadow duration-200">
-            <h3 className="text-sm font-semibold text-foreground mb-0.5">Balance by Product</h3>
-            <p className="text-xs text-muted mb-4">Current stock (boxes)</p>
+            <h3 className="text-sm font-semibold text-foreground mb-0.5">{t('balance_by_product')}</h3>
+            <p className="text-xs text-muted mb-4">{t('current_stock_boxes')}</p>
             {productBalanceData.length === 0 ? (
-              <div className="flex items-center justify-center h-48 text-sm text-muted">No data yet</div>
+              <div className="flex items-center justify-center h-48 text-sm text-muted">{t('no_data_yet')}</div>
             ) : (
               <ResponsiveContainer width="100%" height={220}>
                 <BarChart data={productBalanceData} layout="vertical" margin={{ top: 0, right: 8, left: 0, bottom: 0 }}>
@@ -308,15 +324,22 @@ export default function Dashboard({ setPage }: Props) {
 
         {/* ── Recent movements feed ────────────────────────────── */}
         <div className="bg-card border border-border rounded-[var(--radius-lg)] p-4 sm:p-6 hover:shadow-md transition-shadow duration-200">
-          <h3 className="text-sm font-semibold text-foreground mb-4">Recent Movements</h3>
+          <h3 className="text-sm font-semibold text-foreground mb-4">{t('recent_movements')}</h3>
           {recentMoves.length === 0 ? (
-            <p className="text-sm text-muted text-center py-8">No movements recorded yet</p>
+            <p className="text-sm text-muted text-center py-8">{t('no_movements_recorded_yet')}</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full min-w-[480px]">
                 <thead>
                   <tr className="border-b border-border/60">
-                    {['Date', 'Product', 'Type', 'In', 'Out', 'Balance'].map(h => (
+                    {[
+                      t('date_label'),
+                      t('product'),
+                      t('type_label'),
+                      t('in_label'),
+                      t('out_label'),
+                      t('balance_label'),
+                    ].map(h => (
                       <th key={h} className="text-left text-[10px] text-muted uppercase tracking-wide px-3 py-2 whitespace-nowrap">{h}</th>
                     ))}
                   </tr>
@@ -334,7 +357,7 @@ export default function Dashboard({ setPage }: Props) {
                             m.type === 'marketing_agent' ? 'bg-secondary/10 text-secondary' :
                             'bg-muted/20 text-muted'
                           }`}>
-                            {m.type === 'production' ? 'Production' : m.type === 'marketing_agent' ? 'Dispatch' : m.type}
+                            {m.type === 'production' ? t('production') : m.type === 'marketing_agent' ? t('dispatch') : t('other')}
                           </span>
                         </td>
                         <td className="px-3 py-2.5 text-xs font-mono text-success whitespace-nowrap">{m.stockIn > 0 ? `+${m.stockIn}` : '—'}</td>
@@ -348,7 +371,7 @@ export default function Dashboard({ setPage }: Props) {
             </div>
           )}
           <button onClick={() => setPage('stock')} className="mt-4 text-xs text-primary font-medium hover:underline">
-            View all movements →
+            {t('view_all_movements')} →
           </button>
         </div>
       </div>
@@ -389,7 +412,7 @@ export default function Dashboard({ setPage }: Props) {
 
     // Chart Data: Loan vs Revenue monthly comparison
  // NEW — real data per month
-const agentMonthlyData = getLastMonths(6).map(({ key, label }) => {
+const agentMonthlyData = getLastMonths(6, lang).map(({ key, label }) => {
   const monthReports = myReports.filter(r => r.date.startsWith(key))
   return {
     month: label,
@@ -399,10 +422,10 @@ const agentMonthlyData = getLastMonths(6).map(({ key, label }) => {
 })
 
     const maKpis = [
-      { label: 'Clients Handled', value: handlesCount.toString(), sub: 'total assigned clients', color: '#2E9E8F', icon: Users },
-      { label: 'Clients With Loans', value: clientsWithLoansCount.toString(), sub: 'unpaid balances', color: '#D99A3D', icon: CreditCard },
-      { label: 'Total Loans', value: `${totalLoansAmount.toLocaleString()} RWF`, sub: 'outstanding amount', color: '#E05C5C', icon: DollarSign },
-      { label: 'Paid Revenue', value: `${myPaidRevenue.toLocaleString()} RWF`, sub: 'collected sales', color: '#3FA66B', icon: TrendingUp },
+      { label: t('clients_handled'), value: handlesCount.toString(), sub: t('total_assigned_clients'), color: '#2E9E8F', icon: Users },
+      { label: t('clients_with_loans'), value: clientsWithLoansCount.toString(), sub: t('unpaid_balances'), color: '#D99A3D', icon: CreditCard },
+      { label: t('total_loans'), value: `${totalLoansAmount.toLocaleString()} RWF`, sub: t('outstanding_amount'), color: '#E05C5C', icon: DollarSign },
+      { label: t('paid_revenue'), value: `${myPaidRevenue.toLocaleString()} RWF`, sub: t('collected_sales'), color: '#3FA66B', icon: TrendingUp },
     ]
     // NEW — stock accountability (what he's been given vs what he's given out)
     const myDispatchedValue = stockMovements
@@ -420,14 +443,14 @@ const agentMonthlyData = getLastMonths(6).map(({ key, label }) => {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 lg:mb-8">
           <div>
             <h1 className="text-xl sm:text-2xl font-bold text-foreground">{greeting}, {userName} 👋</h1>
-            <p className="text-muted text-sm mt-1">Marketing Agent Operations Portal · {dateStr}</p>
+            <p className="text-muted text-sm mt-1">{t('marketing_agent_operations_portal')} · {dateStr}</p>
           </div>
           <div className="flex items-center gap-2">
             <button onClick={() => setPage('clients')} className="px-3.5 py-2 text-xs font-semibold bg-primary text-white rounded-[var(--radius)] hover:bg-primary/90 transition-colors">
-              + Add Client
+              + {t('add_client')}
             </button>
             <button onClick={() => setPage('reports')} className="px-3.5 py-2 text-xs font-semibold bg-card border border-border text-foreground rounded-[var(--radius)] hover:bg-accent/40 transition-colors">
-              + Sales Report
+              + {t('sales_report')}
             </button>
           </div>
         </div>
@@ -448,23 +471,23 @@ const agentMonthlyData = getLastMonths(6).map(({ key, label }) => {
 
           {/* ── Stock Accountability ─────────────────────────────── */}
         <div className="mb-6 lg:mb-8">
-          <h2 className="text-sm font-semibold text-foreground mb-3">Stock Accountability</h2>
+          <h2 className="text-sm font-semibold text-foreground mb-3">{t('stock_accountability')}</h2>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
             <div className="bg-secondary/10 border border-secondary/20 rounded-[var(--radius-lg)] p-4 sm:p-5 hover:shadow-md hover:-translate-y-0.5 transition-all duration-200">
-              <div className="text-[11px] text-secondary uppercase tracking-wide mb-1">Stock Given to Me</div>
+              <div className="text-[11px] text-secondary uppercase tracking-wide mb-1">{t('stock_given_to_me')}</div>
               <div className="text-xl font-mono text-secondary">{myStockLoan.toLocaleString()} RWF</div>
-              <div className="text-[11px] text-muted mt-1">Dispatched minus returns</div>
+              <div className="text-[11px] text-muted mt-1">{t('dispatched_minus_returns')}</div>
             </div>
             <div className="bg-primary/10 border border-primary/20 rounded-[var(--radius-lg)] p-4 sm:p-5 hover:shadow-md hover:-translate-y-0.5 transition-all duration-200">
-              <div className="text-[11px] text-primary uppercase tracking-wide mb-1">Sales Distributed</div>
+              <div className="text-[11px] text-primary uppercase tracking-wide mb-1">{t('sales_distributed')}</div>
               <div className="text-xl font-mono text-primary">{myDistributedValue.toLocaleString()} RWF</div>
-              <div className="text-[11px] text-muted mt-1">Given out to my clients</div>
+              <div className="text-[11px] text-muted mt-1">{t('given_out_to_my_clients')}</div>
             </div>
             <div className="bg-success/10 border border-success/20 rounded-[var(--radius-lg)] p-4 sm:p-5 hover:shadow-md hover:-translate-y-0.5 transition-all duration-200">
-              <div className="text-[11px] text-success uppercase tracking-wide mb-1">Still in My Hands</div>
+              <div className="text-[11px] text-success uppercase tracking-wide mb-1">{t('still_in_my_hands')}</div>
               <div className="text-xl font-mono text-success">{myRemainingStock.toLocaleString()} RWF</div>
               <button onClick={() => setPage('loans')} className="text-[11px] text-success/80 hover:underline mt-1 block">
-                View full breakdown →
+                {t('view_full_breakdown')} →
               </button>
             </div>
           </div>
@@ -473,8 +496,8 @@ const agentMonthlyData = getLastMonths(6).map(({ key, label }) => {
         {/* Charts Row: Revenue vs Loans */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 mb-6 lg:mb-8">
           <div className="lg:col-span-2 bg-card border border-border rounded-[var(--radius-lg)] p-4 sm:p-6 hover:shadow-md transition-shadow duration-200">
-            <h3 className="text-sm font-semibold text-foreground mb-0.5">Loan vs Revenue Overview</h3>
-            <p className="text-xs text-muted mb-4">Monthly collection vs pending credit (RWF)</p>
+            <h3 className="text-sm font-semibold text-foreground mb-0.5">{t('loan_vs_revenue_overview')}</h3>
+            <p className="text-xs text-muted mb-4">{t('monthly_collection_vs_pending_credit_rwf')}</p>
             <ResponsiveContainer width="100%" height={220}>
               <BarChart data={agentMonthlyData} barGap={4}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#E4EAE8" vertical={false} />
@@ -491,25 +514,25 @@ const agentMonthlyData = getLastMonths(6).map(({ key, label }) => {
           {/* Client Portfolio Overview */}
           <div className="bg-card border border-border rounded-[var(--radius-lg)] p-4 sm:p-6 hover:shadow-md transition-shadow duration-200 flex flex-col justify-between">
             <div>
-              <h3 className="text-sm font-semibold text-foreground mb-1">Portfolio Summary</h3>
-              <p className="text-xs text-muted mb-4">Client distribution</p>
+              <h3 className="text-sm font-semibold text-foreground mb-1">{t('portfolio_summary')}</h3>
+              <p className="text-xs text-muted mb-4">{t('client_distribution')}</p>
               <div className="space-y-3">
                 <div className="flex items-center justify-between p-3 bg-accent/40 rounded-[var(--radius)]">
-                  <span className="text-xs font-medium text-foreground">Total Handled</span>
+                  <span className="text-xs font-medium text-foreground">{t('total_handled')}</span>
                   <span className="text-sm font-bold text-primary">{handlesCount}</span>
                 </div>
                 <div className="flex items-center justify-between p-3 bg-amber-50 rounded-[var(--radius)] border border-amber-200/50">
-                  <span className="text-xs font-medium text-amber-800">Clients with Credit</span>
+                  <span className="text-xs font-medium text-amber-800">{t('clients_with_credit')}</span>
                   <span className="text-sm font-bold text-amber-700">{clientsWithLoansCount}</span>
                 </div>
                 <div className="flex items-center justify-between p-3 bg-red-50 rounded-[var(--radius)] border border-red-200/50">
-                  <span className="text-xs font-medium text-red-800">Pending Exposure</span>
+                  <span className="text-xs font-medium text-red-800">{t('pending_exposure')}</span>
                   <span className="text-sm font-bold text-red-700">{totalLoansAmount.toLocaleString()} RWF</span>
                 </div>
               </div>
             </div>
             <button onClick={() => setPage('clients')} className="mt-4 w-full py-2 text-xs font-semibold bg-primary/10 text-primary hover:bg-primary/20 rounded-[var(--radius)] transition-colors">
-              Manage Clients →
+              {t('manage_clients')} →
             </button>
           </div>
         </div>
@@ -518,27 +541,27 @@ const agentMonthlyData = getLastMonths(6).map(({ key, label }) => {
         <div className="bg-card border border-border rounded-[var(--radius-lg)] p-4 sm:p-6 hover:shadow-md transition-shadow duration-200">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h3 className="text-sm font-semibold text-foreground">Client Loan Summary Ranking</h3>
-              <p className="text-xs text-muted mt-0.5">Clients ranked by highest outstanding loan balance</p>
+              <h3 className="text-sm font-semibold text-foreground">{t('client_loan_summary_ranking')}</h3>
+              <p className="text-xs text-muted mt-0.5">{t('clients_ranked_by_highest_outstanding_loan_balance')}</p>
             </div>
             <button onClick={() => setPage('loans')} className="text-xs font-medium text-primary hover:underline">
-              View all loans →
+              {t('view_all_loans')} →
             </button>
           </div>
 
           {loanRankings.length === 0 ? (
-            <p className="text-sm text-muted text-center py-8">No clients registered yet.</p>
+            <p className="text-sm text-muted text-center py-8">{t('no_clients_registered_yet')}</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full min-w-[600px]">
                 <thead>
                   <tr className="border-b border-border/60">
-                    <th className="text-left text-[10px] text-muted uppercase tracking-wide px-3 py-2">Rank</th>
-                    <th className="text-left text-[10px] text-muted uppercase tracking-wide px-3 py-2">Client</th>
-                    <th className="text-left text-[10px] text-muted uppercase tracking-wide px-3 py-2">District / Market</th>
-                    <th className="text-left text-[10px] text-muted uppercase tracking-wide px-3 py-2">Phone</th>
-                    <th className="text-right text-[10px] text-muted uppercase tracking-wide px-3 py-2">Outstanding Loan</th>
-                    <th className="text-center text-[10px] text-muted uppercase tracking-wide px-3 py-2">Risk Status</th>
+                    <th className="text-left text-[10px] text-muted uppercase tracking-wide px-3 py-2">{t('rank')}</th>
+                    <th className="text-left text-[10px] text-muted uppercase tracking-wide px-3 py-2">{t('client')}</th>
+                    <th className="text-left text-[10px] text-muted uppercase tracking-wide px-3 py-2">{t('district_market')}</th>
+                    <th className="text-left text-[10px] text-muted uppercase tracking-wide px-3 py-2">{t('phone')}</th>
+                    <th className="text-right text-[10px] text-muted uppercase tracking-wide px-3 py-2">{t('outstanding_loan')}</th>
+                    <th className="text-center text-[10px] text-muted uppercase tracking-wide px-3 py-2">{t('risk_status')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -567,7 +590,7 @@ const agentMonthlyData = getLastMonths(6).map(({ key, label }) => {
                             risk === 'Moderate' ? 'bg-amber-100 text-amber-700' :
                             'bg-emerald-100 text-emerald-700'
                           }`}>
-                            {risk === 'High' ? 'High Risk' : risk === 'Moderate' ? 'Loan Active' : 'Clear'}
+                            {risk === 'High' ? t('high_risk') : risk === 'Moderate' ? t('loan_active') : t('clear')}
                           </span>
                         </td>
                       </tr>
@@ -596,13 +619,16 @@ const agentMonthlyData = getLastMonths(6).map(({ key, label }) => {
 
   const stockChartData = stockMovements.map(m => ({
     date: fmtDate(m.date),
-    Balance: m.balance,
-    'Stock In': m.stockIn,
-    'Stock Out': m.stockOut,
+    [t('balance')]: m.balance,
+    [t('stock_in')]: m.stockIn,
+    [t('stock_out')]: m.stockOut,
   }))
 
+  const revenueKey = t('revenue')
+  const loansKey = t('loans')
+
   // NEW — real data per month
-const monthlyData = getLastMonths(6).map(({ key, label }) => {
+  const monthlyData = getLastMonths(6, lang).map(({ key, label }) => {
   const monthReports = activeReports.filter(r => r.date.startsWith(key))
   return {
     month: label,
@@ -619,10 +645,10 @@ const monthlyData = getLastMonths(6).map(({ key, label }) => {
   const PIE_COLORS = ['#2E9E8F', '#D99A3D', '#3FA66B']
 
   const kpis = [
-    { label: 'Total Stock', value: `${totalStock.toLocaleString()} boxes`, icon: Package, color: 'primary', trend: '+200 today', trendUp: true },
-    { label: 'Revenue (Paid)', value: fmt(totalRevenue), icon: DollarSign, color: 'success', trend: `${activeReports.filter(r => r.paymentStatus === 'paid').length} sales`, trendUp: true },
-    { label: 'Outstanding Loans', value: fmt(outstandingLoans), icon: CreditCard, color: 'secondary', trend: `${activeReports.filter(r => r.paymentStatus === 'loan').length} clients`, trendUp: false },
-    { label: 'Active Clients', value: activeClients.toString(), icon: Users, color: 'foreground', trend: `${agents.filter(a => !a.deleted).length} agents`, trendUp: true },
+    { label: t('total_stock'), value: `${totalStock.toLocaleString()} ${t('boxes')}`, icon: Package, color: 'primary', trend: `+200 ${t('today')}`, trendUp: true },
+    { label: t('revenue_paid'), value: fmt(totalRevenue), icon: DollarSign, color: 'success', trend: `${activeReports.filter(r => r.paymentStatus === 'paid').length} ${t('sales')}`, trendUp: true },
+    { label: t('outstanding_loans'), value: fmt(outstandingLoans), icon: CreditCard, color: 'secondary', trend: `${activeReports.filter(r => r.paymentStatus === 'loan').length} ${t('clients')}`, trendUp: false },
+    { label: t('active_clients'), value: activeClients.toString(), icon: Users, color: 'foreground', trend: `${agents.filter(a => !a.deleted).length} ${t('agents')}`, trendUp: true },
   ]
 
   const colorMap: Record<string, string> = {
@@ -651,7 +677,7 @@ const monthlyData = getLastMonths(6).map(({ key, label }) => {
         <div className="mb-6 bg-secondary/10 border border-secondary/30 rounded-[var(--radius)] px-4 py-3 flex items-center gap-3 animate-in fade-in duration-300">
           <AlertTriangle size={16} className="text-secondary flex-shrink-0" />
           <span className="text-sm text-foreground">
-            <strong>Low stock alert:</strong>{' '}
+            <strong>{t('low_stock_alert')}</strong>{' '}
             {lowStockProducts.map(p => `${p.name} (${currentStock(stockMovements, p.id)} boxes remaining)`).join(', ')}
           </span>
         </div>
@@ -688,8 +714,8 @@ const monthlyData = getLastMonths(6).map(({ key, label }) => {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
         {/* Stock trend */}
         <div className="lg:col-span-2 bg-card border border-border rounded-[var(--radius-lg)] p-6 transition-shadow duration-200 hover:shadow-md">
-          <h3 className="text-sm font-semibold text-foreground mb-1">Stock Movement</h3>
-          <p className="text-xs text-muted mb-5">Running balance over time</p>
+          <h3 className="text-sm font-semibold text-foreground mb-1">{t('stock_movement')}</h3>
+          <p className="text-xs text-muted mb-5">{t('running_balance_over_time')}</p>
           <ResponsiveContainer width="100%" height={220}>
             <AreaChart data={stockChartData}>
               <defs>
@@ -712,8 +738,8 @@ const monthlyData = getLastMonths(6).map(({ key, label }) => {
 
         {/* Payment modes */}
         <div className="bg-card border border-border rounded-[var(--radius-lg)] p-6 transition-shadow duration-200 hover:shadow-md">
-          <h3 className="text-sm font-semibold text-foreground mb-1">Payment Modes</h3>
-          <p className="text-xs text-muted mb-5">By total amount received</p>
+          <h3 className="text-sm font-semibold text-foreground mb-1">{t('payment_modes')}</h3>
+          <p className="text-xs text-muted mb-5">{t('by_total_amount_received')}</p>
           <ResponsiveContainer width="100%" height={180}>
             <PieChart>
               <Pie data={pieData} cx="50%" cy="50%" innerRadius={50} outerRadius={75} paddingAngle={3} dataKey="value">
@@ -731,8 +757,8 @@ const monthlyData = getLastMonths(6).map(({ key, label }) => {
       {/* Monthly chart */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
         <div className="lg:col-span-2 bg-card border border-border rounded-[var(--radius-lg)] p-6 transition-shadow duration-200 hover:shadow-md">
-          <h3 className="text-sm font-semibold text-foreground mb-1">Revenue vs Outstanding Loans</h3>
-          <p className="text-xs text-muted mb-5">Monthly comparison (RWF)</p>
+          <h3 className="text-sm font-semibold text-foreground mb-1">{t('revenue_vs_outstanding_loans')}</h3>
+          <p className="text-xs text-muted mb-5">{t('monthly_comparison_rwf')}</p>
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={monthlyData} barGap={4}>
               <CartesianGrid strokeDasharray="3 3" stroke="#E4EAE8" vertical={false} />
@@ -748,14 +774,14 @@ const monthlyData = getLastMonths(6).map(({ key, label }) => {
 
         {/* Quick links */}
         <div className="bg-card border border-border rounded-[var(--radius-lg)] p-6 transition-shadow duration-200 hover:shadow-md">
-          <h3 className="text-sm font-semibold text-foreground mb-4">Recent Activity</h3>
+          <h3 className="text-sm font-semibold text-foreground mb-4">{t('recent_activity')}</h3>
           <div className="space-y-3">
             {stockMovements.slice(-5).reverse().map(m => (
               <div key={m.id} className="flex items-center gap-3">
                 <div className={`w-2 h-2 rounded-full flex-shrink-0 ${m.stockIn > 0 ? 'bg-success' : 'bg-danger'}`} />
                 <div className="flex-1 min-w-0">
                   <div className="text-xs font-medium text-foreground capitalize">
-                    {m.type === 'production' ? 'Production' : m.type === 'marketing_agent' ? 'Agent dispatch' : 'Other'}
+                    {m.type === 'production' ? t('production') : m.type === 'marketing_agent' ? t('dispatch') : t('other')}
                   </div>
                   <div className="text-[11px] text-muted">{fmtDate(m.date)}</div>
                 </div>
@@ -769,7 +795,7 @@ const monthlyData = getLastMonths(6).map(({ key, label }) => {
             onClick={() => setPage('stock')}
             className="mt-4 text-xs text-primary font-medium hover:underline"
           >
-            View all movements →
+            {t('view_all_movements')} →
           </button>
         </div>
       </div>

@@ -134,7 +134,7 @@ const handleConfirmPayment = async () => {
       amount: a.portion,
       mode,
       bank_id: mode === "bank" ? bankId || null : null,
-      receiver_name: mode === "telephone" ? receiverName || null : null,
+      receiver_name: mode === "telephone" || mode === "bank" ? receiverName || null : null,
       created_by: user.name,
     }));
 
@@ -413,6 +413,20 @@ const handleConfirmPayment = async () => {
                       </div>
                     )}
 
+                    {mode === "bank" && (
+                      <div>
+                        <label className="text-xs text-muted uppercase tracking-wide block mb-1.5">
+                          Name of Person Who Made the Transfer
+                        </label>
+                        <input
+                          value={receiverName}
+                          onChange={(e) => setReceiverName(e.target.value)}
+                          placeholder="e.g. client's name or agent's name"
+                          className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30"
+                        />
+                      </div>
+                    )}
+
                     {mode === "telephone" && (
                       <div>
                         <label className="text-xs text-muted uppercase tracking-wide block mb-1.5">Receiver Name</label>
@@ -426,7 +440,7 @@ const handleConfirmPayment = async () => {
 
                     <button
                       onClick={handleConfirmPayment}
-                      disabled={saving || !amount}
+                      disabled={saving || !amount || (mode === "bank" && !receiverName.trim())}
                       className="w-full py-2.5 text-sm bg-primary text-white rounded-[var(--radius)] hover:bg-primary/90 transition-colors disabled:opacity-60"
                     >
                       {saving ? "Confirming…" : "Confirm Payment"}
@@ -564,7 +578,7 @@ const handleConfirmPayment = async () => {
                               <td className="px-3 py-2 text-xs font-mono text-primary">{p.mode === "bank" ? fmt(p.amount) : "—"}</td>
                               <td className="px-3 py-2 text-xs text-muted">{p.mode === "bank" ? getBankName(p.bankId) : "—"}</td>
                               <td className="px-3 py-2 text-xs font-mono text-secondary">{p.mode === "telephone" ? fmt(p.amount) : "—"}</td>
-                              <td className="px-3 py-2 text-xs text-muted">{p.mode === "telephone" ? (p.receiverName || "—") : "—"}</td>
+                              <td className="px-3 py-2 text-xs text-muted">{p.mode === "telephone" || p.mode === "bank" ? (p.receiverName || "—") : "—"}</td>
                               <td className="px-3 py-2 text-xs text-muted">—</td>
                               <td className="px-3 py-2 text-xs text-muted">—</td>
                               <td className="px-3 py-2 text-xs text-muted">—</td>

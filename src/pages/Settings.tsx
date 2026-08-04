@@ -24,6 +24,9 @@ import { Confirm } from "../components/Confirm";
 import { supabase } from "../lib/supabase";
 import { normalizeRole, type Role } from "../lib/types";
 import Swal from "sweetalert2";
+import { getStoredTheme, setStoredTheme, applyTheme, type Theme as ThemeType } from "../lib/theme";
+import { useI18n } from "../lib/i18n";
+import type { Lang } from "../lib/translations";
 
 type Theme = "light" | "dark" | "system";
 type Section =
@@ -46,25 +49,26 @@ const THEMES: { id: Theme; label: string; icon: React.ElementType }[] = [
 const LANGUAGES = [
   { id: "en", label: "English" },
   { id: "fr", label: "Français" },
-  { id: "rw", label: "Kinyarwanda" },
+  { id: "rw", label: "IKinyarwanda" },
 ];
 
-const SECTIONS_ALL: { id: Section; label: string; icon: React.ElementType }[] = [
-  { id: "account", label: "Account", icon: UserIcon },
-  { id: "appearance", label: "Appearance", icon: Palette },
-  { id: "language", label: "Language", icon: Languages },
-  { id: "banks", label: "Banks", icon: Building2 },
-  { id: "roles", label: "Access Roles", icon: ShieldCheck },
-  { id: "users", label: "Users", icon: Users },
-  { id: "logs", label: "Activity Logs", icon: History },
-  { id: "security", label: "Security", icon: Lock },
-  { id: "turbo", label: "Turbo Mode", icon: Zap },
+const SECTIONS_ALL: { id: Section; labelKey: string; icon: React.ElementType }[] = [
+  { id: "account", labelKey: "account", icon: UserIcon },
+  { id: "appearance", labelKey: "appearance", icon: Palette },
+  { id: "language", labelKey: "language", icon: Languages },
+  { id: "banks", labelKey: "banks", icon: Building2 },
+  { id: "roles", labelKey: "roles", icon: ShieldCheck },
+  { id: "users", labelKey: "users", icon: Users },
+  { id: "logs", labelKey: "logs", icon: History },
+  { id: "security", labelKey: "security", icon: Lock },
+  { id: "turbo", labelKey: "turbo", icon: Zap },
 ];
 
 const LIMITED_SECTION_IDS: Section[] = ["account", "appearance", "language"];
 
 export default function Settings() {
   const { state, dispatch } = useStore();
+  const { lang, setLang, t } = useI18n(); 
   const userRole = normalizeRole(state.user?.role);
   const canEdit = userRole === "manager";
   const SECTIONS = canEdit
@@ -142,11 +146,11 @@ export default function Settings() {
 
     if (accountForm.newPassword || accountForm.confirmPassword) {
       if (accountForm.newPassword.length < 6) {
-        setAccountError("New password must be at least 6 characters.");
+        setAccountError(t("new_password_min_length"));
         return;
       }
       if (accountForm.newPassword !== accountForm.confirmPassword) {
-        setAccountError("Passwords don't match.");
+        setAccountError(t("passwords_do_not_match"));
         return;
       }
     }
@@ -196,8 +200,8 @@ export default function Settings() {
 
       await Swal.fire({
         icon: "info",
-        title: "Confirm your new email",
-        text: "We sent a confirmation link to your new email address. Please log in again after confirming.",
+        title: t("confirm_new_email_title"),
+        text: t("confirm_new_email_text"),
         confirmButtonColor: "#2E9E8F",
       });
 
@@ -223,7 +227,7 @@ export default function Settings() {
 
     setAccountForm((f) => ({ ...f, newPassword: "", confirmPassword: "" }));
     setAccountSaving(false);
-    setAccountSuccess("Account updated.");
+    setAccountSuccess(t("account_updated"));
   }
   // --- Activity logs ---
   type LogEntry = {
@@ -268,10 +272,10 @@ export default function Settings() {
 
     const confirmed = await Swal.fire({
       icon: "warning",
-      title: `Enter Turbo Mode as ${target.name}?`,
-      text: "You'll act as this user until you exit turbo mode. Everything you do will be logged.",
+      title: `${t("enter_turbo_mode_prefix")} ${target.name}?`,
+      text: t("turbo_mode_warning"),
       showCancelButton: true,
-      confirmButtonText: "Enter Turbo Mode",
+      confirmButtonText: t("enter_turbo_mode"),
       confirmButtonColor: "#dc2626",
     });
     if (!confirmed.isConfirmed) return;
@@ -292,8 +296,8 @@ export default function Settings() {
       setTurboLoading(null);
       Swal.fire({
         icon: "error",
-        title: "Could not enter turbo mode",
-        text: data?.error || error?.message || "Something went wrong.",
+        title: t("could_not_enter_turbo_mode"),
+        text: data?.error || error?.message || t("something_went_wrong"),
         confirmButtonColor: "#2E9E8F",
       });
       return;
@@ -356,11 +360,11 @@ export default function Settings() {
   async function handleSetPin() {
     setPinError("");
     if (pinValue.length < 4) {
-      setPinError("PIN must be at least 4 digits.");
+      setPinError(t("pin_min_digits_error"));
       return;
     }
     if (pinValue !== pinConfirm) {
-      setPinError("PINs don't match.");
+      setPinError(t("pins_do_not_match"));
       return;
     }
     setPinLoading(true);
@@ -377,7 +381,7 @@ export default function Settings() {
     setPinIsSet(true);
     Swal.fire({
       icon: "success",
-      title: "Security PIN saved",
+      title: t("security_pin_saved"),
       confirmButtonColor: "#2E9E8F",
     });
   }
@@ -386,12 +390,12 @@ export default function Settings() {
   async function requireManagerPin(actionLabel: string): Promise<boolean> {
     const { value: pin } = await Swal.fire({
       icon: "warning",
-      title: "Security PIN required",
-      text: `This action (${actionLabel}) affects another manager's account. Enter the security PIN to continue.`,
+      title: t("security_pin_required"),
+      text: `${t("security_pin_required_text_prefix")}${actionLabel}${t("security_pin_required_text_suffix")}`,
       input: "password",
-      inputPlaceholder: "Enter PIN",
+      inputPlaceholder: t("enter_pin_placeholder"),
       showCancelButton: true,
-      confirmButtonText: "Verify",
+      confirmButtonText: t("verify"),
       confirmButtonColor: "#2E9E8F",
     });
     if (!pin) return false;
@@ -400,7 +404,7 @@ export default function Settings() {
     if (!valid) {
       Swal.fire({
         icon: "error",
-        title: "Incorrect PIN",
+        title: t("incorrect_pin"),
         confirmButtonColor: "#2E9E8F",
       });
       return false;
@@ -411,7 +415,7 @@ export default function Settings() {
   function groupLogsByDate(entries: LogEntry[]) {
     const groups: Record<string, LogEntry[]> = {};
     for (const l of entries) {
-      const key = new Date(l.createdAt).toLocaleDateString(undefined, {
+      const key = new Date(l.createdAt).toLocaleDateString(lang, {
         weekday: "long",
         year: "numeric",
         month: "long",
@@ -427,10 +431,10 @@ export default function Settings() {
     if (!state.user) return;
     const confirmed = await Swal.fire({
       icon: "warning",
-      title: "Clear all activity logs?",
-      text: "This permanently deletes every log entry. This cannot be undone.",
+      title: t("clear_all_activity_logs_title"),
+      text: t("clear_all_activity_logs_text"),
       showCancelButton: true,
-      confirmButtonText: "Clear all",
+      confirmButtonText: t("clear_all_logs"),
       confirmButtonColor: "#dc2626",
     });
     if (!confirmed.isConfirmed) return;
@@ -449,7 +453,7 @@ export default function Settings() {
     setSelectedDate(null);
     Swal.fire({
       icon: "success",
-      title: "Logs cleared",
+      title: t("logs_cleared"),
       confirmButtonColor: "#2E9E8F",
     });
     fetchLogs();
@@ -459,10 +463,10 @@ export default function Settings() {
     if (!state.user) return;
     const confirmed = await Swal.fire({
       icon: "warning",
-      title: `Delete logs for ${dateLabel}?`,
-      text: `This removes all ${entries.length} ${entries.length === 1 ? "entry" : "entries"} for this date. This cannot be undone.`,
+      title: `${t("delete_logs_for_date_prefix")} ${dateLabel}?`,
+      text: `${t("delete_logs_for_date_text_prefix")} ${entries.length} ${entries.length === 1 ? t("entry") : t("entries")} ${t("delete_logs_for_date_text_suffix")}`,
       showCancelButton: true,
-      confirmButtonText: "Delete",
+      confirmButtonText: t("delete"),
       confirmButtonColor: "#dc2626",
     });
     if (!confirmed.isConfirmed) return;
@@ -493,12 +497,12 @@ export default function Settings() {
 
   function exportLogsCSV(filtered: LogEntry[]) {
     const header = [
-      "Date",
-      "Time",
-      "User",
-      "Action",
-      "Entity Type",
-      "Entity Name",
+      t("date_label"),
+      t("time_label"),
+      t("user_label"),
+      t("action_label"),
+      t("entity_type_label"),
+      t("entity_name_label"),
     ];
     const rows = filtered.map((l) => [
       new Date(l.createdAt).toLocaleDateString(),
@@ -525,8 +529,8 @@ export default function Settings() {
       .map(
         (l) => `
       <tr>
-        <td>${new Date(l.createdAt).toLocaleDateString()}</td>
-        <td>${new Date(l.createdAt).toLocaleTimeString()}</td>
+        <td>${new Date(l.createdAt).toLocaleDateString(lang)}</td>
+        <td>${new Date(l.createdAt).toLocaleTimeString(lang)}</td>
         <td>${l.actorName}</td>
         <td>${l.action ?? ""}</td>
         <td>${l.entityType ?? ""}</td>
@@ -539,7 +543,7 @@ export default function Settings() {
     win.document.write(`
       <html>
         <head>
-          <title>SoapFlow Activity Logs</title>
+          <title>${t("soapflow_activity_logs")}</title>
           <style>
             body { font-family: Arial, sans-serif; padding: 24px; }
             h1 { font-size: 18px; margin-bottom: 4px; }
@@ -550,10 +554,10 @@ export default function Settings() {
           </style>
         </head>
         <body>
-          <h1>SoapFlow — Activity Logs</h1>
-          <p class="meta">Generated ${new Date().toLocaleString()} — ${filtered.length} entries</p>
+          <h1>${t("soapflow_activity_logs")}</h1>
+          <p class="meta">${t("generated_entries_prefix")} ${new Date().toLocaleString(lang)} — ${filtered.length} ${t("generated_entries_suffix")}</p>
           <table>
-            <thead><tr><th>Date</th><th>Time</th><th>User</th><th>Action</th><th>Entity</th><th>Name</th></tr></thead>
+            <thead><tr><th>${t("date_label")}</th><th>${t("time_label")}</th><th>${t("user_label")}</th><th>${t("action_label")}</th><th>${t("entity_type_label")}</th><th>${t("entity_name_label")}</th></tr></thead>
             <tbody>${rowsHtml}</tbody>
           </table>
         </body>
@@ -630,7 +634,7 @@ export default function Settings() {
     if (target.id === state.user?.id) return; // can't change own role
 
     if (target.role === "manager" && target.id !== state.user?.id) {
-      const ok = await requireManagerPin("changing this manager's role");
+      const ok = await requireManagerPin(t("changing_manager_role"));
       if (!ok) return;
     }
 
@@ -641,7 +645,7 @@ export default function Settings() {
     if (error) {
       Swal.fire({
         icon: "error",
-        title: "Could not update role",
+        title: t("could_not_update_role"),
         text: error.message,
         confirmButtonColor: "#2E9E8F",
       });
@@ -654,16 +658,16 @@ export default function Settings() {
     if (u.id === state.user?.id) return; // can't delete self
 
     if (u.role === "manager") {
-      const ok = await requireManagerPin("deleting this manager's account");
+      const ok = await requireManagerPin(t("deleting_manager_account"));
       if (!ok) return;
     }
 
     const confirmed = await Swal.fire({
       icon: "warning",
-      title: `Delete ${u.name}?`,
-      text: "This permanently removes their account and login access. This cannot be undone.",
+      title: `${t("delete_user_prefix")} ${u.name}?`,
+      text: t("delete_user_warning"),
       showCancelButton: true,
-      confirmButtonText: "Delete",
+      confirmButtonText: t("delete"),
       confirmButtonColor: "#dc2626",
     });
     if (!confirmed.isConfirmed) return;
@@ -675,8 +679,8 @@ export default function Settings() {
     if (error || data?.error) {
       Swal.fire({
         icon: "error",
-        title: "Could not delete user",
-        text: data?.error || error?.message || "Something went wrong.",
+        title: t("could_not_delete_user"),
+        text: data?.error || error?.message || t("something_went_wrong"),
         confirmButtonColor: "#2E9E8F",
       });
       return;
@@ -684,7 +688,7 @@ export default function Settings() {
 
     Swal.fire({
       icon: "success",
-      title: "User deleted",
+      title: t("user_deleted"),
       confirmButtonColor: "#2E9E8F",
     });
     fetchUsers();
@@ -702,13 +706,13 @@ export default function Settings() {
 
     const confirmed = await Swal.fire({
       icon: "warning",
-      title: `${action === "deactivate" ? "Deactivate" : "Reactivate"} ${u.name}?`,
+      title: `${action === "deactivate" ? t("deactivate") : t("reactivate")} ${u.name}?`,
       text:
         action === "deactivate"
-          ? "They will no longer be able to log in until reactivated."
-          : "They will be able to log in again.",
+          ? t("deactivate_user_text")
+          : t("reactivate_user_text"),
       showCancelButton: true,
-      confirmButtonText: action === "deactivate" ? "Deactivate" : "Reactivate",
+      confirmButtonText: action === "deactivate" ? t("deactivate") : t("reactivate"),
       confirmButtonColor: action === "deactivate" ? "#dc2626" : "#2E9E8F",
     });
     if (!confirmed.isConfirmed) return;
@@ -727,7 +731,7 @@ export default function Settings() {
       !newUser.email.trim() ||
       !newUser.password.trim()
     ) {
-      setAddUserError("Name, email and password are required.");
+      setAddUserError(t("name_email_password_required"));
       return;
     }
     setAddUserLoading(true);
@@ -737,7 +741,7 @@ export default function Settings() {
     setAddUserLoading(false);
     if (error || data?.error) {
       setAddUserError(
-        data?.error || error?.message || "Failed to create user.",
+        data?.error || error?.message || t("failed_to_create_user"),
       );
       return;
     }
@@ -752,9 +756,21 @@ export default function Settings() {
     fetchUsers();
   }
 
-  // TODO: move these into global store / localStorage so they persist across reloads
-  const [theme, setTheme] = useState<Theme>("light");
-  const [language, setLanguage] = useState("en");
+  const [theme, setThemeState] = useState<Theme>(() => getStoredTheme());
+
+  const setTheme = (t: Theme) => {
+    setThemeState(t);
+    setStoredTheme(t);
+  };
+
+  // Keep "system" mode reactive if the OS theme changes while the app is open
+  useEffect(() => {
+    if (theme !== "system") return;
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const handler = () => applyTheme("system");
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, [theme]);
 
   const [bankLoading, setBankLoading] = useState(false);
 
@@ -773,9 +789,9 @@ export default function Settings() {
     if (error) {
       Swal.fire({
         icon: "error",
-        title: "Could not add bank",
+        title: t("could_not_add_bank"),
         text: error.message.includes("duplicate")
-          ? "That bank is already registered."
+          ? t("bank_already_registered")
           : error.message,
         confirmButtonColor: "#2E9E8F",
       });
@@ -805,7 +821,7 @@ export default function Settings() {
     if (error) {
       Swal.fire({
         icon: "error",
-        title: "Could not delete bank",
+        title: t("could_not_delete_bank"),
         text: error.message,
         confirmButtonColor: "#2E9E8F",
       });
@@ -827,9 +843,9 @@ export default function Settings() {
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-5xl">
       <div className="mb-6 lg:mb-8">
-        <h1 className="text-xl font-bold text-foreground">Settings</h1>
+        <h1 className="text-xl font-bold text-foreground">{t("settings_title")}</h1>
         <p className="text-sm text-muted mt-0.5">
-          Manage system configuration and preferences
+          {t("settings_subtitle")}
         </p>
       </div>
 
@@ -854,7 +870,7 @@ export default function Settings() {
                     size={15}
                     className={active ? "text-primary" : "text-muted"}
                   />
-                  {s.label}
+                  {t(s.labelKey)}
                 </button>
               );
             })}
@@ -865,7 +881,7 @@ export default function Settings() {
         <div className="flex-1 min-w-0 max-w-2xl">
           {section === "account" && (
             <div className="bg-card border border-border rounded-[var(--radius-lg)] p-5 sm:p-6">
-              <h3 className="text-sm font-semibold text-foreground mb-4">Account</h3>
+              <h3 className="text-sm font-semibold text-foreground mb-4">{t("account")}</h3>
               <div className="flex items-center gap-4 mb-6">
                 <div className="w-12 h-12 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0">
                   <span className="text-primary text-lg font-bold">{state.user?.name.charAt(0)}</span>
@@ -877,14 +893,14 @@ export default function Settings() {
                       state.user?.role === "manager" ? "bg-primary/10 text-primary" : "bg-secondary/10 text-secondary"
                     }`}
                   >
-                    {state.user?.role} — {state.user?.role === "manager" ? "Full access" : "Read only"}
+                    {state.user?.role} — {state.user?.role === "manager" ? t("full_access") : t("read_only")}
                   </div>
                 </div>
               </div>
 
               <div className="space-y-4 max-w-md">
                 <div>
-                  <label className="text-xs font-semibold text-muted uppercase tracking-wide block mb-1.5">Full Name</label>
+                  <label className="text-xs font-semibold text-muted uppercase tracking-wide block mb-1.5">{t("full_name")}</label>
                   <input
                     value={accountForm.name}
                     onChange={(e) => setAccountForm((f) => ({ ...f, name: e.target.value }))}
@@ -892,7 +908,7 @@ export default function Settings() {
                   />
                 </div>
                 <div>
-                  <label className="text-xs font-semibold text-muted uppercase tracking-wide block mb-1.5">Phone</label>
+                  <label className="text-xs font-semibold text-muted uppercase tracking-wide block mb-1.5">{t("phone")}</label>
                   <input
                     value={accountForm.phone}
                     onChange={(e) => setAccountForm((f) => ({ ...f, phone: e.target.value }))}
@@ -900,23 +916,23 @@ export default function Settings() {
                   />
                 </div>
                 <div>
-                  <label className="text-xs font-semibold text-muted uppercase tracking-wide block mb-1.5">Email Address</label>
+                  <label className="text-xs font-semibold text-muted uppercase tracking-wide block mb-1.5">{t("email_address")}</label>
                   <input
                     type="email"
                     value={accountForm.email}
                     onChange={(e) => setAccountForm((f) => ({ ...f, email: e.target.value }))}
                     className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
                   />
-                  <p className="text-[11px] text-muted mt-1">Changing this signs you out — you'll confirm it by email, then log in again.</p>
+                  <p className="text-[11px] text-muted mt-1">{t("email_change_note")}</p>
                 </div>
                 <div className="pt-2 border-t border-border">
-                  <p className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">Change Password (optional)</p>
+                  <p className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">{t("change_password_optional")}</p>
                   <div className="relative mb-3">
                     <input
                       type={showAccountPw ? "text" : "password"}
                       value={accountForm.newPassword}
                       onChange={(e) => setAccountForm((f) => ({ ...f, newPassword: e.target.value }))}
-                      placeholder="New password"
+                      placeholder={t("new_password")}
                       className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary pr-10"
                     />
                     <button
@@ -931,7 +947,7 @@ export default function Settings() {
                     type={showAccountPw ? "text" : "password"}
                     value={accountForm.confirmPassword}
                     onChange={(e) => setAccountForm((f) => ({ ...f, confirmPassword: e.target.value }))}
-                    placeholder="Confirm new password"
+                    placeholder={t("confirm_new_password")}
                     className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
                   />
                 </div>
@@ -952,7 +968,7 @@ export default function Settings() {
                   disabled={accountSaving}
                   className="bg-primary text-white text-sm font-semibold px-5 py-2.5 rounded-[var(--radius)] hover:bg-primary/90 transition-colors disabled:opacity-60"
                 >
-                  {accountSaving ? "Saving…" : "Save Changes"}
+                  {accountSaving ? t("saving") : t("save_changes")}
                 </button>
               </div>
             </div>
@@ -963,11 +979,11 @@ export default function Settings() {
               <div className="flex items-center gap-2 mb-4">
                 <Palette size={16} className="text-muted" />
                 <h3 className="text-sm font-semibold text-foreground">
-                  Appearance
+                  {t("appearance")}
                 </h3>
               </div>
               <p className="text-xs text-muted mb-4">
-                Choose how SoapFlow looks on your device
+                {t("choose_theme")}
               </p>
               <div className="grid grid-cols-3 gap-2 sm:gap-3">
                 {THEMES.map((t) => {
@@ -998,19 +1014,19 @@ export default function Settings() {
               <div className="flex items-center gap-2 mb-4">
                 <Languages size={16} className="text-muted" />
                 <h3 className="text-sm font-semibold text-foreground">
-                  Language
+                  {t("language")}
                 </h3>
               </div>
               <p className="text-xs text-muted mb-4">
-                Choose your preferred display language
+                {t("choose_language")}
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3">
                 {LANGUAGES.map((l) => {
-                  const active = language === l.id;
+                  const active = lang === l.id;
                   return (
                     <button
                       key={l.id}
-                      onClick={() => setLanguage(l.id)}
+                      onClick={() => setLang(l.id as Lang)}
                       className={`py-2.5 text-sm font-medium rounded-[var(--radius)] border transition-all ${
                         active
                           ? "border-primary bg-primary/10 text-primary"
@@ -1030,13 +1046,12 @@ export default function Settings() {
               <div className="px-5 sm:px-6 py-4 border-b border-border flex items-center gap-2">
                 <Building2 size={16} className="text-muted flex-shrink-0" />
                 <h3 className="text-sm font-semibold text-foreground">
-                  Registered Banks
-                </h3>
-                <span className="ml-auto text-xs text-muted">
-                  {state.banks.length} banks
-                </span>
-              </div>
-
+                    {t("registered_banks")}
+                  </h3>
+                  <span className="ml-auto text-xs text-muted">
+                    {state.banks.length} {t("banks")}
+                  </span>
+                </div>
               {canEdit && (
                 <div className="px-5 sm:px-6 py-4 border-b border-border bg-background/50">
                   <div className="flex flex-col sm:flex-row gap-2.5 sm:gap-3">
@@ -1044,7 +1059,7 @@ export default function Settings() {
                       value={newBank}
                       onChange={(e) => setNewBank(e.target.value)}
                       onKeyDown={(e) => e.key === "Enter" && handleAddBank()}
-                      placeholder="Bank name, e.g. Bank of Kigali"
+                      placeholder={t("bank_name_placeholder")}
                       className="flex-1 px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
                     />
                     <button
@@ -1053,7 +1068,7 @@ export default function Settings() {
                       className="flex items-center justify-center gap-2 bg-primary text-white text-sm font-semibold px-4 py-2.5 rounded-[var(--radius)] hover:bg-primary/90 transition-colors flex-shrink-0 disabled:opacity-60"
                     >
                       <Plus size={14} />
-                      {bankLoading ? "Adding…" : "Add"}
+                      {bankLoading ? t("adding") : t("add")}
                     </button>
                   </div>
                 </div>
@@ -1062,7 +1077,7 @@ export default function Settings() {
               <div className="divide-y divide-border/50">
                 {state.banks.length === 0 ? (
                   <div className="py-10 text-center text-sm text-muted">
-                    No banks registered yet
+                    {t("no_banks_yet")}
                   </div>
                 ) : (
                   state.banks.map((b) => (
@@ -1096,29 +1111,33 @@ export default function Settings() {
           {section === "roles" && (
             <div className="bg-card border border-border rounded-[var(--radius-lg)] p-5 sm:p-6">
               <h3 className="text-sm font-semibold text-foreground mb-4">
-                Access Roles
+                {t("access_roles")}
               </h3>
               <div className="space-y-3">
                 {[
                   {
-                    role: "Manager",
+                    role: "manager",
+                    label: t("role_manager"),
                     color: "primary",
-                    desc: "Full CRUD access — add, edit, delete records across all modules, plus user management.",
+                    desc: t("role_manager_desc"),
                   },
                   {
-                    role: "Marketing Agent",
+                    role: "marketing_agent",
+                    label: t("role_marketing_agent"),
                     color: "secondary",
-                    desc: "Records supply reports for clients they visit; limited to their own reports.",
+                    desc: t("role_marketing_agent_desc"),
                   },
                   {
-                    role: "Stock Agent",
+                    role: "stock_agent",
+                    label: t("role_stock_agent"),
                     color: "secondary",
-                    desc: "Records production and stock movements.",
+                    desc: t("role_stock_agent_desc"),
                   },
                   {
-                    role: "Readonly",
+                    role: "readonly",
+                    label: t("role_readonly"),
                     color: "secondary",
-                    desc: "View-only access across all data and reports, no modifications allowed.",
+                    desc: t("role_readonly_desc"),
                   },
                 ].map((r) => (
                   <div
@@ -1128,7 +1147,7 @@ export default function Settings() {
                     <span
                       className={`text-[11px] font-semibold px-2.5 py-1 rounded-full h-fit flex-shrink-0 whitespace-nowrap ${r.color === "primary" ? "bg-primary/10 text-primary" : "bg-secondary/10 text-secondary"}`}
                     >
-                      {r.role}
+                      {r.label}
                     </span>
                     <p className="text-sm text-muted">{r.desc}</p>
                   </div>
@@ -1142,16 +1161,16 @@ export default function Settings() {
               <div className="px-5 sm:px-6 py-4 border-b border-border flex items-center gap-2">
                 <Users size={16} className="text-muted flex-shrink-0" />
                 <h3 className="text-sm font-semibold text-foreground">
-                  Team Members
+                  {t("team_members")}
                 </h3>
                 <span className="ml-auto text-xs text-muted">
-                  {users.length} users
+                  {users.length} {t("all_users")}
                 </span>
               </div>
 
               {!canEdit ? (
                 <div className="py-10 text-center text-sm text-muted">
-                  Only managers can manage users.
+                  {t("only_managers_manage_users")}
                 </div>
               ) : (
                 <>
@@ -1162,7 +1181,7 @@ export default function Settings() {
                         className="flex items-center gap-2 bg-primary text-white text-sm font-semibold px-4 py-2.5 rounded-[var(--radius)] hover:bg-primary/90 transition-colors"
                       >
                         <Plus size={14} />
-                        Add user
+                        {t("add_user")}
                       </button>
                     ) : (
                       <div className="space-y-3">
@@ -1172,7 +1191,7 @@ export default function Settings() {
                             onChange={(e) =>
                               setNewUser({ ...newUser, name: e.target.value })
                             }
-                            placeholder="Full name"
+                            placeholder={t("full_name_placeholder")}
                             className="px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
                           />
                           <input
@@ -1180,7 +1199,7 @@ export default function Settings() {
                             onChange={(e) =>
                               setNewUser({ ...newUser, phone: e.target.value })
                             }
-                            placeholder="Phone (optional)"
+                            placeholder={t("phone_optional")}
                             className="px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
                           />
                           <input
@@ -1189,7 +1208,7 @@ export default function Settings() {
                             onChange={(e) =>
                               setNewUser({ ...newUser, email: e.target.value })
                             }
-                            placeholder="Email address"
+                            placeholder={t("email_address_placeholder")}
                             className="px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
                           />
                           <div className="relative">
@@ -1202,7 +1221,7 @@ export default function Settings() {
                                   password: e.target.value,
                                 })
                               }
-                              placeholder="Temporary password"
+                              placeholder={t("temporary_password")}
                               className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary pr-10"
                             />
                             <button
@@ -1228,11 +1247,11 @@ export default function Settings() {
                             className="sm:col-span-2 px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary bg-card"
                           >
                             <option value="marketing_agent">
-                              Marketing Agent
+                              {t("role_marketing_agent")}
                             </option>
-                            <option value="stock_agent">Stock Agent</option>
-                            <option value="readonly">Readonly</option>
-                            <option value="manager">Manager</option>
+                            <option value="stock_agent">{t("role_stock_agent")}</option>
+                            <option value="readonly">{t("role_readonly")}</option>
+                            <option value="manager">{t("role_manager")}</option>
                           </select>
                         </div>
 
@@ -1248,7 +1267,7 @@ export default function Settings() {
                             disabled={addUserLoading}
                             className="bg-primary text-white text-sm font-semibold px-4 py-2.5 rounded-[var(--radius)] hover:bg-primary/90 transition-colors disabled:opacity-60"
                           >
-                            {addUserLoading ? "Creating…" : "Create user"}
+                            {addUserLoading ? t("creating") : t("create_user")}
                           </button>
                           <button
                             onClick={() => {
@@ -1257,7 +1276,7 @@ export default function Settings() {
                             }}
                             className="text-sm font-medium text-muted px-4 py-2.5 rounded-[var(--radius)] hover:bg-accent/40 transition-colors"
                           >
-                            Cancel
+                            {t("cancel")}
                           </button>
                         </div>
                       </div>
@@ -1267,11 +1286,11 @@ export default function Settings() {
                   <div className="divide-y divide-border/50">
                     {usersLoading ? (
                       <div className="py-10 text-center text-sm text-muted">
-                        Loading…
+                        {t("loading")}
                       </div>
                     ) : users.length === 0 ? (
                       <div className="py-10 text-center text-sm text-muted">
-                        No users yet
+                        {t("no_users_yet")}
                       </div>
                     ) : (
                       users.map((u) => (
@@ -1284,7 +1303,7 @@ export default function Settings() {
                               {u.name}
                               {!u.is_active && (
                                 <span className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full bg-danger/10 text-danger">
-                                  Deactivated
+                                  {t("deactivated")}
                                 </span>
                               )}
                             </div>
@@ -1294,7 +1313,7 @@ export default function Settings() {
                           </div>
                           {u.id === state.user?.id ? (
                             <span className="text-xs text-muted italic px-2 py-1.5 flex-shrink-0">
-                              This is you
+                              {t("this_is_you")}
                             </span>
                           ) : (
                             <>
@@ -1305,12 +1324,10 @@ export default function Settings() {
                                 }
                                 className="text-xs font-medium px-2 py-1.5 rounded-[var(--radius-sm)] border border-border bg-card flex-shrink-0"
                               >
-                                <option value="manager">Manager</option>
-                                <option value="marketing_agent">
-                                  Marketing Agent
-                                </option>
-                                <option value="stock_agent">Stock Agent</option>
-                                <option value="readonly">Readonly</option>
+                                <option value="manager">{t("role_manager")}</option>
+                                <option value="marketing_agent">{t("role_marketing_agent")}</option>
+                                <option value="stock_agent">{t("role_stock_agent")}</option>
+                                <option value="readonly">{t("role_readonly")}</option>
                               </select>
                               <button
                                 onClick={() => handleToggleActive(u)}
@@ -1320,12 +1337,12 @@ export default function Settings() {
                                     : "text-primary hover:bg-primary/10"
                                 }`}
                               >
-                                {u.is_active ? "Deactivate" : "Reactivate"}
+                                {u.is_active ? t("deactivate") : t("reactivate")}
                               </button>
                               <button
                                 onClick={() => handleDeleteUser(u)}
                                 className="p-1.5 text-muted hover:text-danger hover:bg-danger/10 rounded-[var(--radius-sm)] flex-shrink-0 transition-colors"
-                                title="Delete user"
+                                title={t("delete_user_tooltip")}
                               >
                                 <Trash2 size={14} />
                               </button>
@@ -1361,7 +1378,7 @@ export default function Settings() {
                             onClick={() => setSelectedDate(null)}
                             className="text-xs font-semibold text-primary hover:underline mr-1"
                           >
-                            ← All dates
+                            ← {t("all_dates")}
                           </button>
                         )}
                         <History
@@ -1369,7 +1386,7 @@ export default function Settings() {
                           className="text-muted flex-shrink-0"
                         />
                         <h3 className="text-sm font-semibold text-foreground">
-                          {selectedDate ?? "Activity Logs"}
+                          {selectedDate ?? t("activity_logs_title")}
                         </h3>
                       </div>
                       <div className="flex items-center gap-2 sm:ml-auto">
@@ -1382,7 +1399,7 @@ export default function Settings() {
                           }}
                           className="text-xs font-medium px-2.5 py-1.5 rounded-[var(--radius-sm)] border border-border bg-card flex-1 sm:flex-none"
                         >
-                          <option value="all">All users</option>
+                          <option value="all">{t("all_users")}</option>
                           {Array.from(
                             new Map(
                               logs.map((l) => [l.actorId, l.actorName]),
@@ -1397,7 +1414,7 @@ export default function Settings() {
                           )}
                         </select>
                         <span className="text-xs text-muted whitespace-nowrap">
-                          {filteredLogs.length} entries
+                          {filteredLogs.length} {t("entries")}
                         </span>
                       </div>
                     </div>
@@ -1408,19 +1425,19 @@ export default function Settings() {
                           onClick={() => exportLogsCSV(filteredLogs)}
                           className="text-xs font-semibold px-3 py-1.5 rounded-[var(--radius-sm)] border border-border text-foreground hover:bg-accent/40 transition-colors"
                         >
-                          Download CSV
+                          {t("download_csv")}
                         </button>
                         <button
                           onClick={() => printLogs(filteredLogs)}
                           className="text-xs font-semibold px-3 py-1.5 rounded-[var(--radius-sm)] border border-border text-foreground hover:bg-accent/40 transition-colors"
                         >
-                          Print
+                          {t("print")}
                         </button>
                         <button
                           onClick={handleClearAllLogs}
                           className="text-xs font-semibold px-3 py-1.5 rounded-[var(--radius-sm)] border border-danger/30 text-danger hover:bg-danger/10 transition-colors ml-auto"
                         >
-                          Clear all logs
+                          {t("clear_all_logs")}
                         </button>
                       </div>
                     )}
@@ -1428,15 +1445,15 @@ export default function Settings() {
 
                   {!canEdit ? (
                     <div className="py-10 text-center text-sm text-muted">
-                      Only managers can view activity logs.
+                      {t("only_managers_view_logs")}
                     </div>
                   ) : logsLoading ? (
                     <div className="py-10 text-center text-sm text-muted">
-                      Loading…
+                      {t("loading")}
                     </div>
                   ) : filteredLogs.length === 0 ? (
                     <div className="py-10 text-center text-sm text-muted">
-                      No activity yet
+                      {t("no_activity_yet")}
                     </div>
                   ) : !selectedDate ? (
                     <div className="p-5 sm:p-6 grid grid-cols-2 sm:grid-cols-3 gap-3">
@@ -1465,7 +1482,7 @@ export default function Settings() {
                               </div>
                               <div className="text-xs text-muted mt-1">
                                 {dayEntries.length}{" "}
-                                {dayEntries.length === 1 ? "entry" : "entries"}
+                                {dayEntries.length === 1 ? t("entry") : t("entries")}
                               </div>
                               {(loginCount > 0 || logoutCount > 0) && (
                                 <div className="flex items-center gap-3 mt-2 text-[11px] text-muted">
@@ -1496,7 +1513,7 @@ export default function Settings() {
                                 handleDeleteDateLogs(dateLabel, dayEntries);
                               }}
                               className="absolute top-2 right-2 p-1 text-muted hover:text-danger hover:bg-danger/10 rounded-[var(--radius-sm)] opacity-0 group-hover:opacity-100 transition-opacity"
-                              title="Delete this day's logs"
+                              title={t("delete_this_day_logs")}
                             >
                               <Trash2 size={12} />
                             </button>
@@ -1574,38 +1591,36 @@ export default function Settings() {
               <div className="flex items-center gap-2 mb-1">
                 <Lock size={16} className="text-muted" />
                 <h3 className="text-sm font-semibold text-foreground">
-                  Security PIN
+                  {t("security_pin")}
                 </h3>
               </div>
               <p className="text-xs text-muted mb-4">
-                Required whenever a manager acts on another manager's account
-                (role change, deactivate, or delete). Keep this between managers
-                only.
+                {t("security_pin_description")}
               </p>
 
               {!canEdit ? (
                 <div className="py-6 text-center text-sm text-muted">
-                  Only managers can manage the security PIN.
+                  {t("only_managers_manage_security_pin")}
                 </div>
               ) : (
                 <div className="space-y-3 max-w-xs">
                   {pinIsSet && (
                     <div className="text-xs bg-primary/10 text-primary rounded-[var(--radius-sm)] px-3 py-2">
-                      A PIN is already set. Saving a new one below replaces it.
+                      {t("pin_already_set_notice")}
                     </div>
                   )}
                   <input
                     type="password"
                     value={pinValue}
                     onChange={(e) => setPinValue(e.target.value)}
-                    placeholder="New PIN (min 4 digits)"
+                    placeholder={t("new_pin_placeholder")}
                     className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
                   />
                   <input
                     type="password"
                     value={pinConfirm}
                     onChange={(e) => setPinConfirm(e.target.value)}
-                    placeholder="Confirm PIN"
+                    placeholder={t("confirm_pin_placeholder")}
                     className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
                   />
                   {pinError && (
@@ -1619,10 +1634,10 @@ export default function Settings() {
                     className="w-full bg-primary text-white text-sm font-semibold px-4 py-2.5 rounded-[var(--radius)] hover:bg-primary/90 transition-colors disabled:opacity-60"
                   >
                     {pinLoading
-                      ? "Saving…"
+                      ? t("saving")
                       : pinIsSet
-                        ? "Update PIN"
-                        : "Set PIN"}
+                        ? t("update_pin")
+                        : t("set_pin")}
                   </button>
                 </div>
               )}
@@ -1634,36 +1649,35 @@ export default function Settings() {
               <div className="px-5 sm:px-6 py-4 border-b border-border flex items-center gap-2">
                 <Zap size={16} className="text-muted flex-shrink-0" />
                 <h3 className="text-sm font-semibold text-foreground">
-                  Turbo Mode — Log In As Another User
+                  {t("turbo_mode_heading")}
                 </h3>
               </div>
 
               {turboActive && (
                 <div className="mx-5 sm:mx-6 mt-4 flex items-center justify-between gap-3 text-xs bg-danger/10 text-danger border border-danger/20 rounded-[var(--radius)] px-3 py-2.5">
                   <span>
-                    You're currently in Turbo Mode as <b>{state.user?.name}</b>
-                    {turboOriginName ? ` (originally ${turboOriginName})` : ""}.
+                    {t("currently_in_turbo_mode_as")} <b>{state.user?.name}</b>
+                    {turboOriginName ? `${t("originally")} ${turboOriginName})` : ""}.
                   </span>
                   <button
                     onClick={handleExitTurbo}
                     className="font-semibold px-3 py-1.5 rounded-[var(--radius-sm)] bg-danger text-white hover:bg-danger/90 flex-shrink-0"
                   >
-                    Exit Turbo Mode
+                    {t("exit_turbo_mode")}
                   </button>
                 </div>
               )}
 
               <p className="px-5 sm:px-6 pt-4 text-xs text-muted">
-                Pick a user to act as them. Entering and exiting is logged, so you
-                can always see when a turbo session started and ended in Activity Logs.
+                {t("turbo_instructions")}
               </p>
 
               {!canEdit ? (
                 <div className="py-10 text-center text-sm text-muted">
-                  Only managers can use Turbo Mode.
+                  {t("only_managers_use_turbo")}
                 </div>
               ) : usersLoading ? (
-                <div className="py-10 text-center text-sm text-muted">Loading…</div>
+                <div className="py-10 text-center text-sm text-muted">{t("loading")}</div>
               ) : (
                 <div className="divide-y divide-border/50 mt-2">
                   {users
@@ -1687,7 +1701,7 @@ export default function Settings() {
                           className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-[var(--radius-sm)] bg-primary/10 text-primary hover:bg-primary/20 transition-colors disabled:opacity-50 flex-shrink-0"
                         >
                           <Zap size={12} />
-                          {turboLoading === u.id ? "Entering…" : "Turbo as this user"}
+                          {turboLoading === u.id ? t("entering") : t("turbo_as_this_user")}
                         </button>
                       </div>
                     ))}
@@ -1706,23 +1720,23 @@ export default function Settings() {
                 onClick={(e) => e.stopPropagation()}
               >
                 <h3 className="text-sm font-semibold text-foreground mb-4">
-                  Log details
+                  {t("log_details")}
                 </h3>
                 <div className="space-y-2.5 text-sm">
                   <div className="flex justify-between gap-3">
-                    <span className="text-muted">User</span>
+                    <span className="text-muted">{t("user_label")}</span>
                     <span className="text-foreground font-medium text-right">
                       {selectedLog.actorName}
                     </span>
                   </div>
                   <div className="flex justify-between gap-3">
-                    <span className="text-muted">Action</span>
+                    <span className="text-muted">{t("action_label")}</span>
                     <span className="text-foreground font-medium text-right">
                       {selectedLog.action}
                     </span>
                   </div>
                   <div className="flex justify-between gap-3">
-                    <span className="text-muted">Affected record</span>
+                    <span className="text-muted">{t("affected_record_label")}</span>
                     <span className="text-foreground font-medium text-right">
                       {selectedLog.entityType}
                       {selectedLog.entityName
@@ -1731,14 +1745,14 @@ export default function Settings() {
                     </span>
                   </div>
                   <div className="flex justify-between gap-3">
-                    <span className="text-muted">Date &amp; time</span>
+                    <span className="text-muted">{t("date_time_label")}</span>
                     <span className="text-foreground font-medium text-right">
                       {new Date(selectedLog.createdAt).toLocaleString()}
                     </span>
                   </div>
                   {selectedLog.details && (
                     <div>
-                      <span className="text-muted block mb-1.5">Details</span>
+                      <span className="text-muted block mb-1.5">{t("details_label")}</span>
                       <pre className="text-xs bg-background border border-border rounded-[var(--radius)] p-3 overflow-x-auto whitespace-pre-wrap break-words">
                         {JSON.stringify(selectedLog.details, null, 2)}
                       </pre>
@@ -1749,7 +1763,7 @@ export default function Settings() {
                   onClick={() => setSelectedLog(null)}
                   className="mt-5 w-full text-sm font-semibold text-muted hover:text-foreground py-2"
                 >
-                  Close
+                  {t("close")}
                 </button>
               </div>
             </div>
