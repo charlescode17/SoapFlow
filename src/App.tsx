@@ -60,6 +60,36 @@ function AppInner() {
   if (!state.user) return <Login onLoginSuccess={handleLoginSuccess} />;
 
   const logout = async () => {
+    const turboOriginSession = sessionStorage.getItem("turbo_origin_session");
+    const turboOriginUser = sessionStorage.getItem("turbo_origin_user");
+
+    if (turboOriginSession && turboOriginUser) {
+      // In turbo mode — logout button means "exit turbo", not a real sign-out
+      const originSession = JSON.parse(turboOriginSession);
+      const originUser = JSON.parse(turboOriginUser);
+
+      await supabase.from("activity_logs").insert({
+        actor_id: originUser.id,
+        actor_name: originUser.name,
+        action: "exited_turbo",
+        entity_type: "user",
+        entity_id: state.user?.id,
+        entity_name: state.user?.name,
+      });
+
+      await supabase.auth.setSession({
+        access_token: originSession.access_token,
+        refresh_token: originSession.refresh_token,
+      });
+
+      sessionStorage.removeItem("turbo_origin_session");
+      sessionStorage.removeItem("turbo_origin_user");
+
+      window.location.reload();
+      return;
+    }
+
+    // Normal logout — not in turbo mode
     if (state.user) {
       await supabase.from("auth_logs").insert({ user_id: state.user.id, event: "logout" });
     }
@@ -73,7 +103,7 @@ return (
       {transitionPhase !== "hidden" && <SessionTransition phase={transitionPhase} />}
       {turboActive && (
         <div className="bg-danger text-white text-center text-xs font-semibold py-2 px-4">
-          ⚡ Turbo Mode active — you're acting as {state.user?.name}. Go to Settings → Turbo Mode to exit.
+          ⚡ Turbo Mode active — you're acting as {state.user?.name}. Click Logout to exit turbo mode.
         </div>
       )}
       <Layout page={page} setPage={setPage} user={state.user} onLogout={logout}>

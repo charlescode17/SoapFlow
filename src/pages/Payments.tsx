@@ -63,6 +63,11 @@ export default function Payments() {
     state.products.find((p) => p.id === id)?.name ?? "—";
   const getClientName = (id: string) =>
     activeClients.find((c) => c.id === id)?.name ?? "—";
+  const getPaymentPartyName = (p: { clientId?: string; reportId?: string }) => {
+    if (p.clientId) return getClientName(p.clientId);
+    const report = state.agentReports.find((r) => r.id === p.reportId);
+    return report?.customerName?.trim() || "Walk-in customer";
+  };
 
   const getBankName = (id?: string) =>
     id ? state.banks.find((b) => b.id === id)?.name ?? "—" : "—";
@@ -573,7 +578,7 @@ const handleConfirmPayment = async () => {
                           </tr>
                           {dayPayments.map((p) => (
                             <tr key={p.id} className="border-b border-border/40">
-                              <td className="px-3 py-2 text-xs text-foreground whitespace-nowrap">{getClientName(p.clientId)}</td>
+                              <td className="px-3 py-2 text-xs text-foreground whitespace-nowrap">{getPaymentPartyName(p)}</td>
                               <td className="px-3 py-2 text-xs font-mono text-success">{p.mode === "cash" ? fmt(p.amount) : "—"}</td>
                               <td className="px-3 py-2 text-xs font-mono text-primary">{p.mode === "bank" ? fmt(p.amount) : "—"}</td>
                               <td className="px-3 py-2 text-xs text-muted">{p.mode === "bank" ? getBankName(p.bankId) : "—"}</td>

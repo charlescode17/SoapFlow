@@ -120,6 +120,14 @@ export default function Settings() {
   const [addUserError, setAddUserError] = useState("");
   const [addUserLoading, setAddUserLoading] = useState(false);
 
+  const [showResetPassword, setShowResetPassword] = useState(false);
+  const [resetPasswordUserId, setResetPasswordUserId] = useState("");
+  const [resetPasswordValue, setResetPasswordValue] = useState("");
+  const [resetPasswordConfirm, setResetPasswordConfirm] = useState("");
+  const [showResetPasswordPw, setShowResetPasswordPw] = useState(false);
+  const [resetPasswordError, setResetPasswordError] = useState("");
+  const [resetPasswordLoading, setResetPasswordLoading] = useState(false);
+
   useEffect(() => {
     if (section === "users" && canEdit) fetchUsers();
     if (section === "turbo" && canEdit) fetchUsers();
@@ -756,6 +764,54 @@ export default function Settings() {
     fetchUsers();
   }
 
+  async function handleResetUserPassword() {
+    setResetPasswordError("");
+    if (!resetPasswordUserId) {
+      setResetPasswordError("Select a user first.");
+      return;
+    }
+    if (resetPasswordValue.length < 6) {
+      setResetPasswordError(t("new_password_min_length"));
+      return;
+    }
+    if (resetPasswordValue !== resetPasswordConfirm) {
+      setResetPasswordError(t("passwords_do_not_match"));
+      return;
+    }
+
+    const targetUser = users.find((u) => u.id === resetPasswordUserId);
+    if (targetUser?.role === "manager" && targetUser.id !== state.user?.id) {
+      const ok = await requireManagerPin("resetting this manager's password");
+      if (!ok) return;
+    }
+
+    setResetPasswordLoading(true);
+    const { data, error } = await supabase.functions.invoke("admin-reset-password", {
+      body: { userId: resetPasswordUserId, newPassword: resetPasswordValue },
+    });
+    setResetPasswordLoading(false);
+
+    if (error || data?.error) {
+      setResetPasswordError(data?.error || error?.message || t("something_went_wrong"));
+      return;
+    }
+
+    await supabase.from("activity_logs").insert({
+      actor_id: state.user?.id,
+      actor_name: state.user?.name,
+      action: "reset_password",
+      entity_type: "user",
+      entity_id: resetPasswordUserId,
+      entity_name: targetUser?.name ?? "unknown",
+    });
+
+    Swal.fire({ icon: "success", title: "Password updated", confirmButtonColor: "#2E9E8F" });
+    setResetPasswordValue("");
+    setResetPasswordConfirm("");
+    setResetPasswordUserId("");
+    setShowResetPassword(false);
+  }
+
   const [theme, setThemeState] = useState<Theme>(() => getStoredTheme());
 
   const setTheme = (t: Theme) => {
@@ -893,7 +949,7 @@ export default function Settings() {
                       state.user?.role === "manager" ? "bg-primary/10 text-primary" : "bg-secondary/10 text-secondary"
                     }`}
                   >
-                    {state.user?.role} — {state.user?.role === "manager" ? t("full_access") : t("read_only")}
+                    {state.user?.role} — {state.user?.role === "manager" ? t("full_access") : t("Limited Access")}
                   </div>
                 </div>
               </div>
@@ -1277,6 +1333,85 @@ export default function Settings() {
                             className="text-sm font-medium text-muted px-4 py-2.5 rounded-[var(--radius)] hover:bg-accent/40 transition-colors"
                           >
                             {t("cancel")}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="px-5 sm:px-6 py-4 border-b border-border bg-background/50">
+                    {!showResetPassword ? (
+                      <button
+                        onClick={() => setShowResetPassword(true)}
+                        className="flex items-center gap-2 bg-card border border-border text-sm font-semibold px-4 py-2.5 rounded-[var(--radius)] hover:bg-accent/40 transition-colors"
+                      >
+                        <Lock size={14} />
+                        Reset a User's Password
+                      </button>
+                    ) : (
+                      <div className="space-y-3 max-w-md">
+                        <div>
+                          <label className="text-xs font-semibold text-muted uppercase tracking-wide block mb-1.5">
+                            Select User
+                          </label>
+                          <select
+                            value={resetPasswordUserId}
+                            onChange={(e) => setResetPasswordUserId(e.target.value)}
+                            className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] bg-card focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+                          >
+                            <option value="">Choose a user…</option>
+                            {users.filter((u) => u.id !== state.user?.id).map((u) => (
+                              <option key={u.id} value={u.id}>{u.name} — {u.email}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="relative">
+                          <input
+                            type={showResetPasswordPw ? "text" : "password"}
+                            value={resetPasswordValue}
+                            onChange={(e) => setResetPasswordValue(e.target.value)}
+                            placeholder="New password"
+                            className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary pr-10"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowResetPasswordPw((v) => !v)}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted hover:text-foreground"
+                          >
+                            {showResetPasswordPw ? <EyeOff size={14} /> : <Eye size={14} />}
+                          </button>
+                        </div>
+                        <input
+                          type={showResetPasswordPw ? "text" : "password"}
+                          value={resetPasswordConfirm}
+                          onChange={(e) => setResetPasswordConfirm(e.target.value)}
+                          placeholder="Retype new password"
+                          className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+                        />
+                        {resetPasswordError && (
+                          <div className="text-danger text-xs bg-danger/10 border border-danger/20 rounded-[var(--radius-sm)] px-3 py-2">
+                            {resetPasswordError}
+                          </div>
+                        )}
+                        <div className="flex gap-2">
+                          <button
+                            onClick={handleResetUserPassword}
+                            disabled={resetPasswordLoading}
+                            className="bg-primary text-white text-sm font-semibold px-4 py-2.5 rounded-[var(--radius)] hover:bg-primary/90 transition-colors disabled:opacity-60"
+                          >
+                            {resetPasswordLoading ? "Updating…" : "Update Password"}
+                          </button>
+                          <button
+                            onClick={() => {
+                              setShowResetPassword(false);
+                              setResetPasswordError("");
+                              setResetPasswordUserId("");
+                              setResetPasswordValue("");
+                              setResetPasswordConfirm("");
+                            }}
+                            className="text-sm font-medium text-muted px-4 py-2.5 rounded-[var(--radius)] hover:bg-accent/40 transition-colors"
+                          >
+                            Cancel
                           </button>
                         </div>
                       </div>

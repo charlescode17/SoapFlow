@@ -81,7 +81,7 @@ export function Layout({ page, setPage, user, onLogout, children }: Props) {
           <div className="w-8 h-8 rounded-[var(--radius)] bg-primary flex items-center justify-center">
             <Droplets size={16} className="text-white" />
           </div>
-          <span className="text-white font-bold text-sm">SoapFlow</span>
+          <span className="text-white font-bold text-sm">Kangaroo Bigger</span>
         </div>
         <button
           onClick={() => setMobileOpen(true)}

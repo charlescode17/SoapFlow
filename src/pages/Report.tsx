@@ -1,4 +1,5 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
+import { useReconciliationExpenses } from "../lib/momoExpenses";
 import jsPDF from "jspdf";
 import "jspdf-autotable";
 import ExcelJS from "exceljs";
@@ -55,7 +56,7 @@ import { useVersaimentState, keyFor } from "../lib/versaimentState";
 
 // ============================================================================
 // COMPANY NAME — Edit the text below to change the company name on PDF & Excel reports
-// Just replace "SOAPFLOW" with your company name and it will appear on all printed reports
+// Just replace "kangaroo" with your company name and it will appear on all printed reports
 // ============================================================================
 const COMPANY_NAME = "Kangaroo Bigger";
 
@@ -283,27 +284,6 @@ function buildPdfReport(
 
     y = doc.lastAutoTable.finalY + (isCompact ? 20 : 26);
   });
-
-  // ---- Signature section ----
-  if (!isCompact) {
-    if (y > pageHeight - 120) {
-      doc.addPage();
-      y = 60;
-    } else {
-      y += 14;
-    }
-
-    doc.setDrawColor(150, 150, 150);
-    doc.setLineWidth(0.6);
-    doc.line(margin, y, margin + 180, y);
-    doc.line(pageWidth - margin - 180, y, pageWidth - margin, y);
-    y += 12;
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(8.5);
-    doc.setTextColor(...PDF_COLORS.muted);
-    doc.text("Prepared by", margin, y);
-    doc.text("Approved by", pageWidth - margin - 180, y);
-  }
 
   addPdfFootersAndPageNumbers(doc, margin, isCompact);
   doc.save(filename);
@@ -580,6 +560,35 @@ function inRange(
   return true;
 }
 
+function dateRangeBounds(
+  filter: DateFilter,
+  customFrom: string,
+  customTo: string,
+): { from?: string; to?: string } {
+  const now = new Date();
+  const toStr = (d: Date) => d.toISOString().slice(0, 10);
+
+  if (filter === "daily") {
+    const t = toStr(now);
+    return { from: t, to: t };
+  }
+  if (filter === "weekly") {
+    const weekAgo = new Date(now);
+    weekAgo.setDate(now.getDate() - 7);
+    return { from: toStr(weekAgo), to: toStr(now) };
+  }
+  if (filter === "monthly") {
+    const first = new Date(now.getFullYear(), now.getMonth(), 1);
+    return { from: toStr(first), to: toStr(now) };
+  }
+  if (filter === "annual") {
+    const first = new Date(now.getFullYear(), 0, 1);
+    return { from: toStr(first), to: toStr(now) };
+  }
+ // custom
+  return { from: customFrom || undefined, to: customTo || undefined };
+}
+
 const movementLabel = (type: string) =>
   type === "production"
     ? "Production Stock"
@@ -647,9 +656,21 @@ export default function Report() {
   const [managerView, setManagerView] = useState<"business" | "stock" | "marketing">("business");
   const [managerAgentId, setManagerAgentId] = useState<string>("all");
   const { map: versaimentMap } = useVersaimentState();
-  const [reconciliationExpenses, setReconciliationExpenses] = useState <
+  const { from: reconFrom, to: reconTo } = dateRangeBounds(dateFilter, customFrom, customTo);
+  const {
+    expenses: persistedReconciliationExpenses,
+    addExpense: addPersistedReconciliationExpense,
+    deleteExpense: deletePersistedReconciliationExpense,
+    error: reconciliationError,
+  } = useReconciliationExpenses(state.user?.id, reconFrom, reconTo);
+  const [draftReconciliationExpenses, setDraftReconciliationExpenses] = useState <
     { id: string; name: string; amount: number }[]
   >([]);
+  const [isSavingExpenses, setIsSavingExpenses] = useState(false);
+  const reconciliationExpenses = [
+    ...persistedReconciliationExpenses,
+    ...draftReconciliationExpenses,
+  ];
 
   const toggleSection = (key: string) => {
     setHiddenSections((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -660,6 +681,11 @@ export default function Report() {
 
   const getName = (id: string, list: { id: string; name: string }[]) =>
     list.find((i) => i.id === id)?.name ?? "—";
+  const getPaymentPartyName = (p: { clientId?: string; reportId?: string }) => {
+    if (p.clientId) return getName(p.clientId, clients);
+    const report = activeReports.find((r) => r.id === p.reportId);
+    return report?.customerName?.trim() || "Walk-in customer";
+  };
 
   const inDateRange = (date: string) =>
     inRange(date, dateFilter, customFrom, customTo);
@@ -948,7 +974,7 @@ export default function Report() {
         numericColumns: [3],
       },
     ];
-    const filename = `soapflow-manager-agent-${managerAgentId}-report-${today()}`;
+    const filename = `kangaroo-manager-agent-${managerAgentId}-report-${today()}`;
     if (format === "pdf") buildPdfReport(meta, summary, sections, `${filename}.pdf`, "landscape");
     else if (format === "csv") buildCsvReport(meta, summary, sections, `${filename}.csv`);
     else {
@@ -1093,7 +1119,7 @@ export default function Report() {
         headers: ["Date", "Client", "Amount", "Mode", "Reference"],
         rows: paymentsFiltered.map((p) => [
           fmtDate(p.date),
-          getName(p.clientId, clients),
+          getPaymentPartyName(p),
           fmt(p.amount),
           p.mode === "telephone" ? "Mobile Money" : p.mode === "bank" ? "Bank" : "Cash",
           paymentReference(p),
@@ -1104,7 +1130,7 @@ export default function Report() {
     return { meta, summary, sections };
   };
 
-  const exportFilenameBase = () => `soapflow-${reportType}-report-${today()}`;
+  const exportFilenameBase = () => `kangaroo-${reportType}-report-${today()}`;
 
   const handleExportPdf = () => {
   const { meta, summary, sections } = getAdminReportData();
@@ -1203,7 +1229,7 @@ export default function Report() {
 ],
     });
 
-    const saFilenameBase = () => `soapflow-stock-report-${today()}`;
+    const saFilenameBase = () => `kangaroo-stock-report-${today()}`;
 
     const handleSaExportPdf = () => {
   const { meta, summary, sections } = getStockAgentReportData();
@@ -1423,7 +1449,7 @@ export default function Report() {
                   <tbody>
                     {saTable.map((m, i) => (
                       <tr key={m.id} className={`border-b border-border/40 transition-colors ${i % 2 === 1 ? "bg-background/50" : ""} ${i === saTable.length - 1 ? "border-b-0" : ""}`}>
-                        <td className="px-4 py-3 text-xs font-mono text-muted whitespace-nowrap">{fmtDate(m.date)}</td>
+                        <td className="px-4 py-3 text-xs  text-muted whitespace-nowrap">{fmtDate(m.date)}</td>
                         <td className="px-4 py-3 text-xs font-semibold text-foreground whitespace-nowrap">{getProductName(m.productId)}</td>
                         <td className="px-4 py-3">
                           <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium ${
@@ -1444,7 +1470,7 @@ export default function Report() {
                         <td className="px-4 py-3 text-xs text-muted">{m.location ?? "—"}</td>
                         <td className="px-4 py-3 text-center">
                           {m.stockIn > 0 ? (
-                            <span className="inline-flex items-center gap-1 text-xs font-mono text-success">
+                            <span className="inline-flex items-center gap-1 text-xs  text-success">
                               <ArrowDownCircle size={11} />+{m.stockIn}
                             </span>
                           ) : (
@@ -1453,7 +1479,7 @@ export default function Report() {
                         </td>
                         <td className="px-4 py-3 text-center">
                           {m.stockOut > 0 ? (
-                            <span className="inline-flex items-center gap-1 text-xs font-mono text-danger">
+                            <span className="inline-flex items-center gap-1 text-xs  text-danger">
                               <ArrowUpCircle size={11} />-{m.stockOut}
                             </span>
                           ) : (
@@ -1495,17 +1521,17 @@ export default function Report() {
                           Return
                         </span>
                       )}
-                      <span className="text-[10px] font-mono text-muted">{fmtDate(m.date)}</span>
+                      <span className="text-[10px]  text-muted">{fmtDate(m.date)}</span>
                     </div>
                   </div>
                   <div className="text-xs font-medium text-foreground mb-1">{getProductName(m.productId)}</div>
                   {m.agentId && <div className="text-[11px] text-muted mb-1">{getAgentName(m.agentId)}{m.location ? " · " + m.location : ""}</div>}
                   <div className="flex items-center justify-between mt-2">
                     <div className="flex gap-4">
-                      {m.stockIn > 0 && <span className="text-xs font-mono text-success">+{m.stockIn}</span>}
-                      {m.stockOut > 0 && <span className="text-xs font-mono text-danger">-{m.stockOut}</span>}
+                      {m.stockIn > 0 && <span className="text-xs  text-success">+{m.stockIn}</span>}
+                      {m.stockOut > 0 && <span className="text-xs  text-danger">-{m.stockOut}</span>}
                     </div>
-                    <span className="text-xs text-muted">Bal: <span className="font-mono text-foreground">{m.balance.toLocaleString()}</span></span>
+                    <span className="text-xs text-muted">Bal: <span className=" text-foreground">{m.balance.toLocaleString()}</span></span>
                   </div>
                 </div>
               ))}
@@ -1537,6 +1563,11 @@ export default function Report() {
       id ? state.banks.find((b) => b.id === id)?.name ?? "—" : "—";
     const getReportDate = (reportId?: string) =>
       reportId ? myReports.find((r) => r.id === reportId)?.date : undefined;
+    const getPaymentPartyName = (p: { clientId?: string; reportId?: string }) => {
+      if (p.clientId) return clients.find((c) => c.id === p.clientId)?.name ?? "—";
+      const report = myReports.find((r) => r.id === p.reportId);
+      return report?.customerName?.trim() || "Walk-in customer";
+    };
 
     type SalesLoanRow = {
       key: string;
@@ -1659,7 +1690,7 @@ export default function Report() {
         return {
           key: r.id,
           date: r.date,
-          clientName: client?.name ?? "—",
+          clientName: client?.name ?? r.customerName ?? "Walk-in customer",
           phone: client?.phone ?? "—",
           district: client?.district ?? "—",
           center: client?.center ?? "—",
@@ -1921,7 +1952,7 @@ export default function Report() {
           const client = clients.find((c) => c.id === p.clientId);
           const loanDate = getReportDate(p.reportId);
           exportRows.push([
-            loanDate ? fmtDate(loanDate) : "—", client?.name ?? "—",
+            loanDate ? fmtDate(loanDate) : "—", getPaymentPartyName(p),
             fmt(p.amount), fmtDate(p.date),
             "", "", "",
             "", "",
@@ -1933,7 +1964,7 @@ export default function Report() {
           const loanDate = getReportDate(p.reportId);
           const bankLabel = getBankName(p.bankId) + (p.receiverName ? ` — ${p.receiverName}` : "");
           exportRows.push([
-            loanDate ? fmtDate(loanDate) : "—", client?.name ?? "—",
+            loanDate ? fmtDate(loanDate) : "—", getPaymentPartyName(p),
             "", "",
             fmt(p.amount), fmtDate(p.date), bankLabel,
             "", "",
@@ -1944,7 +1975,7 @@ export default function Report() {
           const client = clients.find((c) => c.id === p.clientId);
           const loanDate = getReportDate(p.reportId);
           exportRows.push([
-            loanDate ? fmtDate(loanDate) : "—", client?.name ?? "—",
+            loanDate ? fmtDate(loanDate) : "—", getPaymentPartyName(p),
             "", "",
             "", "", "",
             fmt(p.amount), p.receiverName || "—",
@@ -2040,7 +2071,7 @@ export default function Report() {
             numericColumns: [2, 4, 7, 9],
           },
           {
-            heading: "Cash Reconciliation",
+            heading: "Total Amount(MOMO)",
             headers: ["Item", "Amount"],
             rows: reconciliationRows,
             numericColumns: [1],
@@ -2050,9 +2081,9 @@ export default function Report() {
     };
 
     const addReconciliationExpense = () => {
-      setReconciliationExpenses((prev) => [
+      setDraftReconciliationExpenses((prev) => [
         ...prev,
-        { id: `exp-${Date.now()}-${prev.length}`, name: "", amount: 0 },
+        { id: `draft-${Date.now()}-${prev.length}`, name: "", amount: 0 },
       ]);
     };
     const updateReconciliationExpense = (
@@ -2060,7 +2091,7 @@ export default function Report() {
       field: "name" | "amount",
       value: string,
     ) => {
-      setReconciliationExpenses((prev) =>
+      setDraftReconciliationExpenses((prev) =>
         prev.map((e) =>
           e.id === id
             ? { ...e, [field]: field === "amount" ? Number(value) || 0 : value }
@@ -2069,10 +2100,32 @@ export default function Report() {
       );
     };
     const removeReconciliationExpense = (id: string) => {
-      setReconciliationExpenses((prev) => prev.filter((e) => e.id !== id));
+      const isDraft = draftReconciliationExpenses.some((e) => e.id === id);
+      if (isDraft) {
+        setDraftReconciliationExpenses((prev) => prev.filter((e) => e.id !== id));
+      } else {
+        deletePersistedReconciliationExpense(id);
+      }
+    };
+    const saveReconciliationExpenses = async () => {
+      const rowsToSave = draftReconciliationExpenses.filter(
+        (e) => e.name.trim() !== "" && e.amount > 0,
+      );
+      if (rowsToSave.length === 0) return;
+      setIsSavingExpenses(true);
+      for (const row of rowsToSave) {
+        await addPersistedReconciliationExpense(
+          row.name,
+          row.amount,
+          state.user?.name ?? "Unknown",
+          state.user?.id ?? "",
+        );
+      }
+      setDraftReconciliationExpenses([]);
+      setIsSavingExpenses(false);
     };
 
-    const maFilenameBase = () => `soapflow-agent-${maSection}-report-${today()}`;
+    const maFilenameBase = () => `kangaroo-agent-${maSection}-report-${today()}`;
 
     const handleMaExportPdf = () => {
       const { meta, summary, sections } = getMarketingAgentReportData();
@@ -2245,19 +2298,19 @@ export default function Report() {
                         <tr key={row.key} className={`border-b border-border/40 ${i % 2 === 1 ? "bg-background/40" : ""} ${i === salesLoanRows.length - 1 ? "border-b-0" : ""}`}>
                           {salesLoanReportSpans[i] > 0 && (
                             <>
-                              <td rowSpan={salesLoanReportSpans[i]} className="px-3 py-3 text-xs font-mono text-muted whitespace-nowrap align-top border-r border-border/30 bg-primary/[0.03]">{fmtDate(row.date)}</td>
+                              <td rowSpan={salesLoanReportSpans[i]} className="px-3 py-3 text-xs  text-muted whitespace-nowrap align-top border-r border-border/30 bg-primary/[0.03]">{fmtDate(row.date)}</td>
                               <td rowSpan={salesLoanReportSpans[i]} className="px-3 py-3 text-xs font-semibold text-foreground whitespace-nowrap align-top border-r border-border/30 bg-primary/[0.03]">{row.clientName}</td>
                               <td rowSpan={salesLoanReportSpans[i]} className="px-3 py-3 text-xs text-muted whitespace-nowrap align-top border-r border-border/30 bg-primary/[0.03]">{row.phone}</td>
                               <td rowSpan={salesLoanReportSpans[i]} className="px-3 py-3 text-xs text-muted whitespace-nowrap align-top border-r border-border/30 bg-primary/[0.03]">{row.district}</td>
                               <td rowSpan={salesLoanReportSpans[i]} className="px-3 py-3 text-xs text-muted whitespace-nowrap align-top border-r border-border/30 bg-primary/[0.03]">{row.center}</td>
                               <td rowSpan={salesLoanReportSpans[i]} className="px-3 py-3 text-xs text-foreground whitespace-nowrap align-top border-r border-border/30 bg-primary/[0.03]">{row.product}</td>
-                              <td rowSpan={salesLoanReportSpans[i]} className="px-3 py-3 text-xs font-mono text-muted align-top border-r border-border/30 bg-primary/[0.03]">{row.qty}</td>
-                              <td rowSpan={salesLoanReportSpans[i]} className="px-3 py-3 text-xs font-mono text-muted align-top border-r border-border/30 bg-primary/[0.03]">{fmt(row.unitPrice)}</td>
+                              <td rowSpan={salesLoanReportSpans[i]} className="px-3 py-3 text-xs  text-muted align-top border-r border-border/30 bg-primary/[0.03]">{row.qty}</td>
+                              <td rowSpan={salesLoanReportSpans[i]} className="px-3 py-3 text-xs  text-muted align-top border-r border-border/30 bg-primary/[0.03]">{fmt(row.unitPrice)}</td>
                               <td rowSpan={salesLoanReportSpans[i]} className="px-3 py-3 text-xs font-semibold text-foreground align-top border-r border-border/30 bg-primary/[0.03]">{fmt(row.totalPrice)}</td>
                             </>
                           )}
-                          <td className="px-3 py-3 text-xs font-mono text-muted whitespace-nowrap">{row.paymentDate ? fmtDate(row.paymentDate) : "—"}</td>
-                          <td className="px-3 py-3 text-xs font-mono text-success">{row.amountPaid != null ? fmt(row.amountPaid) : "—"}</td>
+                          <td className="px-3 py-3 text-xs  text-muted whitespace-nowrap">{row.paymentDate ? fmtDate(row.paymentDate) : "—"}</td>
+                          <td className="px-3 py-3 text-xs  text-success">{row.amountPaid != null ? fmt(row.amountPaid) : "—"}</td>
                           <td className="px-3 py-3 text-xs text-foreground whitespace-nowrap">{row.method ?? "—"}</td>
                           <td className="px-3 py-3 text-xs font-semibold text-secondary">
                             {row.remaining > 0 ? fmt(row.remaining) : <span className="text-success">Settled</span>}
@@ -2312,7 +2365,7 @@ export default function Report() {
                           {salesOnlyDateSpans[i] > 0 && (
                             <td
                               rowSpan={salesOnlyDateSpans[i]}
-                              className="px-3 py-3 text-xs font-mono text-muted whitespace-nowrap align-top border-r border-border/30 bg-primary/[0.03]"
+                              className="px-3 py-3 text-xs  text-muted whitespace-nowrap align-top border-r border-border/30 bg-primary/[0.03]"
                             >
                               {fmtDate(r.date)}
                             </td>
@@ -2322,8 +2375,8 @@ export default function Report() {
                           <td className="px-3 py-3 text-xs text-muted whitespace-nowrap">{r.district}</td>
                           <td className="px-3 py-3 text-xs text-muted whitespace-nowrap">{r.center}</td>
                           <td className="px-3 py-3 text-xs text-foreground whitespace-nowrap">{r.product}</td>
-                          <td className="px-3 py-3 text-xs font-mono text-muted">{r.qty}</td>
-                          <td className="px-3 py-3 text-xs font-mono text-muted">{fmt(r.unitPrice)}</td>
+                          <td className="px-3 py-3 text-xs  text-muted">{r.qty}</td>
+                          <td className="px-3 py-3 text-xs  text-muted">{fmt(r.unitPrice)}</td>
                           <td className="px-3 py-3 text-xs font-semibold text-foreground">{fmt(r.totalPrice)}</td>
                           <td className="px-3 py-3">
                             <span className={`inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded ${r.status === "paid" ? "bg-success/10 text-success" : "bg-secondary/10 text-secondary"}`}>
@@ -2389,12 +2442,12 @@ export default function Report() {
                               <td rowSpan={loanOnlyClientSpans[i]} className="px-3 py-3 text-xs text-muted whitespace-nowrap align-top border-r border-border/30 bg-primary/[0.03]">{r.center}</td>
                             </>
                           )}
-                          <td className="px-3 py-3 text-xs font-mono text-muted whitespace-nowrap">{fmtDate(r.date)}</td>
+                          <td className="px-3 py-3 text-xs  text-muted whitespace-nowrap">{fmtDate(r.date)}</td>
                           <td className="px-3 py-3 text-xs text-foreground whitespace-nowrap">{r.product}</td>
-                          <td className="px-3 py-3 text-xs font-mono text-muted">{r.qty}</td>
+                          <td className="px-3 py-3 text-xs  text-muted">{r.qty}</td>
                           <td className="px-3 py-3 text-xs font-semibold text-foreground">{fmt(r.totalPrice)}</td>
-                          <td className="px-3 py-3 text-xs font-mono text-success">{fmt(r.paid)}</td>
-                          <td className="px-3 py-3 text-xs font-mono text-secondary">
+                          <td className="px-3 py-3 text-xs  text-success">{fmt(r.paid)}</td>
+                          <td className="px-3 py-3 text-xs  text-secondary">
                             {r.remaining > 0 ? fmt(r.remaining) : <span className="text-success">Settled</span>}
                           </td>
                         </tr>
@@ -2414,7 +2467,7 @@ export default function Report() {
               <h3 className="text-sm font-semibold text-foreground">
                 {myClientsList.length} client{myClientsList.length !== 1 ? "s" : ""} handled
               </h3>
-              <span className="text-sm font-mono text-secondary">{fmt(myClientsOutstandingTotal)} total outstanding</span>
+              <span className="text-sm  text-secondary">{fmt(myClientsOutstandingTotal)} total outstanding</span>
             </div>
             {myClientsWithLoans.length === 0 ? (
               <div className="py-16 text-center text-sm text-muted">No clients assigned yet</div>
@@ -2440,7 +2493,7 @@ export default function Report() {
                           <td className="px-3 py-3 text-xs text-muted whitespace-nowrap">{client.district}</td>
                           <td className="px-3 py-3 text-xs text-muted whitespace-nowrap">{client.sector}</td>
                           <td className="px-3 py-3 text-xs text-muted whitespace-nowrap">{client.center}</td>
-                          <td className="px-3 py-3 text-xs font-mono text-secondary">
+                          <td className="px-3 py-3 text-xs  text-secondary">
                             {outstanding > 0 ? fmt(outstanding) : <span className="text-success">Settled</span>}
                           </td>
                         </tr>
@@ -2526,10 +2579,10 @@ export default function Report() {
                               const loanDate = getReportDate(p.reportId);
                               return (
                                 <tr key={p.id} className="border-b border-border/40 hover:bg-accent/20">
-                                  <td className="border border-border/40 px-3 py-2 text-xs font-mono text-muted whitespace-nowrap">{loanDate ? fmtDate(loanDate) : "—"}</td>
-                                  <td className="border border-border/40 px-3 py-2 text-xs text-foreground whitespace-nowrap">{client?.name ?? "—"}</td>
-                                  <td className="border border-border/40 px-3 py-2 text-xs font-mono text-success">{fmt(p.amount)}</td>
-                                  <td className="border border-border/40 px-3 py-2 text-xs font-mono text-muted whitespace-nowrap">{fmtDate(p.date)}</td>
+                                  <td className="border border-border/40 px-3 py-2 text-xs  text-muted whitespace-nowrap">{loanDate ? fmtDate(loanDate) : "—"}</td>
+                                  <td className="border border-border/40 px-3 py-2 text-xs text-foreground whitespace-nowrap">{getPaymentPartyName(p)}</td>
+                                  <td className="border border-border/40 px-3 py-2 text-xs  text-success">{fmt(p.amount)}</td>
+                                  <td className="border border-border/40 px-3 py-2 text-xs  text-muted whitespace-nowrap">{fmtDate(p.date)}</td>
                                   <td colSpan={3} className="border border-border/40 px-3 py-2 text-xs text-muted/50">—</td>
                                   <td colSpan={2} className="border border-border/40 px-3 py-2 text-xs text-muted/50">—</td>
                                   <td className="border border-border/40 px-3 py-2 text-xs text-muted/50">—</td>
@@ -2542,11 +2595,11 @@ export default function Report() {
                               const loanDate = getReportDate(p.reportId);
                               return (
                                 <tr key={p.id} className="border-b border-border/40 hover:bg-accent/20">
-                                  <td className="border border-border/40 px-3 py-2 text-xs font-mono text-muted whitespace-nowrap">{loanDate ? fmtDate(loanDate) : "—"}</td>
-                                  <td className="border border-border/40 px-3 py-2 text-xs text-foreground whitespace-nowrap">{client?.name ?? "—"}</td>
+                                  <td className="border border-border/40 px-3 py-2 text-xs  text-muted whitespace-nowrap">{loanDate ? fmtDate(loanDate) : "—"}</td>
+                                  <td className="border border-border/40 px-3 py-2 text-xs text-foreground whitespace-nowrap">{getPaymentPartyName(p)}</td>
                                   <td colSpan={2} className="border border-border/40 px-3 py-2 text-xs text-muted/50">—</td>
-                                  <td className="border border-border/40 px-3 py-2 text-xs font-mono text-primary">{fmt(p.amount)}</td>
-                                  <td className="border border-border/40 px-3 py-2 text-xs font-mono text-muted whitespace-nowrap">{fmtDate(p.date)}</td>
+                                  <td className="border border-border/40 px-3 py-2 text-xs  text-primary">{fmt(p.amount)}</td>
+                                  <td className="border border-border/40 px-3 py-2 text-xs  text-muted whitespace-nowrap">{fmtDate(p.date)}</td>
                                   <td className="border border-border/40 px-3 py-2 text-xs text-muted whitespace-nowrap">{getBankName(p.bankId)}{p.receiverName ? ` — ${p.receiverName}` : ""}</td>
                                   <td colSpan={2} className="border border-border/40 px-3 py-2 text-xs text-muted/50">—</td>
                                 </tr>
@@ -2558,11 +2611,11 @@ export default function Report() {
                               const loanDate = getReportDate(p.reportId);
                               return (
                                 <tr key={p.id} className="border-b border-border/40 hover:bg-accent/20">
-                                  <td className="border border-border/40 px-3 py-2 text-xs font-mono text-muted whitespace-nowrap">{loanDate ? fmtDate(loanDate) : "—"}</td>
-                                  <td className="border border-border/40 px-3 py-2 text-xs text-foreground whitespace-nowrap">{client?.name ?? "—"}</td>
+                                  <td className="border border-border/40 px-3 py-2 text-xs  text-muted whitespace-nowrap">{loanDate ? fmtDate(loanDate) : "—"}</td>
+                                  <td className="border border-border/40 px-3 py-2 text-xs text-foreground whitespace-nowrap">{getPaymentPartyName(p)}</td>
                                   <td colSpan={2} className="border border-border/40 px-3 py-2 text-xs text-muted/50">—</td>
                                   <td colSpan={3} className="border border-border/40 px-3 py-2 text-xs text-muted/50">—</td>
-                                  <td className="border border-border/40 px-3 py-2 text-xs font-mono text-secondary">{fmt(p.amount)}</td>
+                                  <td className="border border-border/40 px-3 py-2 text-xs  text-secondary">{fmt(p.amount)}</td>
                                   <td className="border border-border/40 px-3 py-2 text-xs text-muted whitespace-nowrap">{p.receiverName || "—"}</td>
                                 </tr>
                               );
@@ -2575,7 +2628,7 @@ export default function Report() {
                                 <td colSpan={2} className="border border-border/40 px-3 py-2 text-xs text-muted/50">—</td>
                                 <td colSpan={3} className="border border-border/40 px-3 py-2 text-xs text-muted/50">—</td>
                                 <td colSpan={2} className="border border-border/40 px-3 py-2 text-xs text-muted/50">—</td>
-                                <td className="border border-border/40 px-3 py-2 text-xs font-mono text-danger">{fmt(e.amount)}</td>
+                                <td className="border border-border/40 px-3 py-2 text-xs  text-danger">{fmt(e.amount)}</td>
                               </tr>
                             ))}
 
@@ -2583,10 +2636,10 @@ export default function Report() {
                               <td colSpan={2} className="border border-border/60 px-3 py-2 text-xs font-semibold text-foreground">
                                 Subtotal — {fmtDate(date)}
                               </td>
-                              <td colSpan={2} className="border border-border/60 px-3 py-2 text-xs font-mono text-success">{fmt(dCash)}</td>
-                              <td colSpan={3} className="border border-border/60 px-3 py-2 text-xs font-mono text-primary">{fmt(dBank)}</td>
-                              <td colSpan={2} className="border border-border/60 px-3 py-2 text-xs font-mono text-secondary">{fmt(dTel)}</td>
-                              <td className="border border-border/60 px-3 py-2 text-xs font-mono text-danger">{fmt(dExp)}</td>
+                              <td colSpan={2} className="border border-border/60 px-3 py-2 text-xs  text-success">{fmt(dCash)}</td>
+                              <td colSpan={3} className="border border-border/60 px-3 py-2 text-xs  text-primary">{fmt(dBank)}</td>
+                              <td colSpan={2} className="border border-border/60 px-3 py-2 text-xs  text-secondary">{fmt(dTel)}</td>
+                              <td className="border border-border/60 px-3 py-2 text-xs  text-danger">{fmt(dExp)}</td>
                             </tr>
                             <tr className="bg-primary/10">
                               <td colSpan={10} className="border border-border/60 px-3 py-2">
@@ -2603,10 +2656,10 @@ export default function Report() {
                         <td colSpan={2} className="border border-border/60 px-3 py-2.5 text-xs font-bold uppercase tracking-wide">
                           Total Cash — {dateLabel[dateFilter]}
                         </td>
-                        <td colSpan={2} className="border border-border/60 px-3 py-2.5 text-xs font-mono font-bold">{fmt(grandCash)}</td>
-                        <td colSpan={3} className="border border-border/60 px-3 py-2.5 text-xs font-mono font-bold">{fmt(grandBank)}</td>
-                        <td colSpan={2} className="border border-border/60 px-3 py-2.5 text-xs font-mono font-bold">{fmt(grandTelephone)}</td>
-                        <td className="border border-border/60 px-3 py-2.5 text-xs font-mono font-bold">{fmt(grandDepense)}</td>
+                        <td colSpan={2} className="border border-border/60 px-3 py-2.5 text-xs">{fmt(grandCash)}</td>
+                        <td colSpan={3} className="border border-border/60 px-3 py-2.5 text-xs">{fmt(grandBank)}</td>
+                        <td colSpan={2} className="border border-border/60 px-3 py-2.5 text-xs">{fmt(grandTelephone)}</td>
+                        <td className="border border-border/60 px-3 py-2.5 text-xs">{fmt(grandDepense)}</td>
                       </tr>
                       <tr className="bg-indigo-600 text-white">
                         <td colSpan={10} className="border border-border/60 px-3 py-2.5 text-xs font-bold uppercase tracking-wide">
@@ -2624,16 +2677,25 @@ export default function Report() {
               <div className="px-5 py-4 border-b border-border bg-primary/[0.06]">
                 <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
                   <Wallet size={15} className="text-primary" />
-                  Cash Reconciliation
+                  Total Amount (MOMO)
                 </h3>
                 <p className="text-xs text-muted mt-0.5">{dateLabel[dateFilter]} · quick summary before versaiment</p>
               </div>
               <div className="divide-y divide-border/60">
                 <div className="flex items-center justify-between px-5 py-3 bg-primary/[0.06]">
                   <span className="text-xs font-bold text-primary uppercase tracking-wide">Total</span>
-                  <span className="text-sm font-mono font-bold text-primary">{fmt(grandTelephone - reconciliationExpensesTotal)}</span>
+                  <span className="text-sm  text-primary">{fmt(grandTelephone - reconciliationExpensesTotal)}</span>
                 </div>
-                {reconciliationExpenses.map((exp) => (
+                {/* Already-saved expenses — view only for marketing agents, manager can edit/delete */}
+                {persistedReconciliationExpenses.map((exp) => (
+                  <div key={exp.id} className="flex items-center justify-between px-5 py-2.5">
+                    <span className="text-xs text-foreground truncate">{exp.name || "Expense"}</span>
+                    <span className="text-xs  text-muted">{fmt(exp.amount)}</span>
+                  </div>
+                ))}
+
+                {/* Not-yet-saved — free to edit/remove until Save */}
+                {draftReconciliationExpenses.map((exp) => (
                   <div key={exp.id} className="flex items-center gap-2 px-5 py-2.5">
                     <input
                       type="text"
@@ -2647,7 +2709,7 @@ export default function Report() {
                       value={exp.amount || ""}
                       onChange={(e) => updateReconciliationExpense(exp.id, "amount", e.target.value)}
                       placeholder="0"
-                      className="w-28 text-xs font-mono px-2.5 py-1.5 border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary text-right"
+                      className="w-28 text-xs  px-2.5 py-1.5 border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary text-right"
                     />
                     <button
                       onClick={() => removeReconciliationExpense(exp.id)}
@@ -2659,18 +2721,31 @@ export default function Report() {
                   </div>
                 ))}
 
-                <div className="px-5 py-2.5">
+                {reconciliationError && (
+                  <div className="px-5 py-2 text-xs text-danger">{reconciliationError}</div>
+                )}
+
+                <div className="px-5 py-2.5 flex items-center gap-4">
                   <button
                     onClick={addReconciliationExpense}
                     className="text-xs font-semibold text-primary hover:underline"
                   >
                     + Add another expense
                   </button>
+                  {draftReconciliationExpenses.length > 0 && (
+                    <button
+                      onClick={saveReconciliationExpenses}
+                      disabled={isSavingExpenses}
+                      className="ml-auto text-xs font-semibold px-3 py-1.5 rounded-[var(--radius)] bg-primary text-white hover:bg-primary/90 transition-colors disabled:opacity-60"
+                    >
+                      {isSavingExpenses ? "Saving..." : "Save Expenses"}
+                    </button>
+                  )}
                 </div>
 
                 <div className="flex items-center justify-between px-5 py-4 bg-primary text-white">
                   <span className="text-xs font-bold uppercase tracking-wide">Remaining</span>
-                  <span className="text-base font-mono font-bold">{fmt(reconciliationRemaining)}</span>
+                  <span className="text-base font-bold">{fmt(reconciliationRemaining)}</span>
                 </div>
               </div>
             </div>
@@ -2717,7 +2792,7 @@ export default function Report() {
                     <tbody>
                       {versaimentRows.map((r, i) => (
                         <tr key={r.date} className={`border-b border-border/40 ${i % 2 === 1 ? "bg-background/40" : ""}`}>
-                          <td className="px-3 py-3 text-xs font-mono text-muted whitespace-nowrap">{fmtDate(r.date)}</td>
+                          <td className="px-3 py-3 text-xs  text-muted whitespace-nowrap">{fmtDate(r.date)}</td>
                           <td className="px-3 py-3 text-xs text-foreground whitespace-nowrap">{r.source === "cash" ? "Cash" : "Mobile Money"}</td>
                           <td className="px-3 py-3 text-xs font-semibold text-foreground">{fmt(r.amount)}</td>
                           <td className="px-3 py-3">
@@ -2725,7 +2800,7 @@ export default function Report() {
                               {r.approved ? "Approved" : "Pending"}
                             </span>
                           </td>
-                          <td className="px-3 py-3 text-xs font-mono text-muted whitespace-nowrap">{r.versaimentDate ? fmtDate(r.versaimentDate) : "—"}</td>
+                          <td className="px-3 py-3 text-xs  text-muted whitespace-nowrap">{r.versaimentDate ? fmtDate(r.versaimentDate) : "—"}</td>
                           <td className="px-3 py-3 text-xs text-foreground whitespace-nowrap">{r.madeBy ?? "—"}</td>
                         </tr>
                       ))}
@@ -3434,7 +3509,7 @@ export default function Report() {
                               i % 2 === 1 ? "bg-background/50" : ""
                             } ${i === stockFiltered.length - 1 ? "border-b-0" : ""}`}
                           >
-                            <td className="px-4 py-3 text-xs font-mono text-muted whitespace-nowrap">
+                            <td className="px-4 py-3 text-xs  text-muted whitespace-nowrap">
                               {fmtDate(m.date)}
                             </td>
                             <td className="px-4 py-3 text-xs font-semibold text-foreground whitespace-nowrap">
@@ -3455,7 +3530,7 @@ export default function Report() {
                             </td>
                             <td className="px-4 py-3 text-center">
                               {m.stockIn > 0 ? (
-                                <div className="inline-flex items-center gap-1.5 text-success text-xs font-mono font-semibold">
+                                <div className="inline-flex items-center gap-1.5 text-success text-xs  font-semibold">
                                   <ArrowDownCircle size={11} />+{m.stockIn}
                                   {m.isReturn && (
                                     <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 uppercase tracking-wide">
@@ -3469,14 +3544,14 @@ export default function Report() {
                             </td>
                             <td className="px-4 py-3 text-center">
                               {m.stockOut > 0 ? (
-                                <span className="inline-flex items-center gap-1 text-danger text-xs font-mono font-semibold">
+                                <span className="inline-flex items-center gap-1 text-danger text-xs  font-semibold">
                                   <ArrowUpCircle size={11} />-{m.stockOut}
                                 </span>
                               ) : (
                                 <span className="text-muted text-xs">—</span>
                               )}
                             </td>
-                            <td className="px-4 py-3 text-xs font-mono font-bold text-right text-foreground whitespace-nowrap">
+                            <td className="px-4 py-3 text-xs  font-bold text-right text-foreground whitespace-nowrap">
                               {m.balance.toLocaleString()} boxes
                             </td>
                           </tr>
@@ -3487,13 +3562,13 @@ export default function Report() {
                         <td colSpan={5} className="px-4 py-3 text-foreground uppercase tracking-wide">
                           Summary ({stockFiltered.length} Records)
                         </td>
-                        <td className="px-4 py-3 text-center text-success font-mono">
+                        <td className="px-4 py-3 text-center text-success ">
                           +{stockFiltered.reduce((s, m) => s + m.stockIn, 0).toLocaleString()}
                         </td>
-                        <td className="px-4 py-3 text-center text-danger font-mono">
+                        <td className="px-4 py-3 text-center text-danger ">
                           -{stockFiltered.reduce((s, m) => s + m.stockOut, 0).toLocaleString()}
                         </td>
-                        <td className="px-4 py-3 text-right text-foreground font-mono">
+                        <td className="px-4 py-3 text-right text-foreground ">
                           {stockFiltered.length > 0
                             ? `${stockFiltered[0].balance.toLocaleString()} boxes`
                             : "—"}
@@ -3514,7 +3589,7 @@ export default function Report() {
                           <span className="text-xs font-bold text-foreground">
                             {getName(m.productId, products)}
                           </span>
-                          <span className="text-[11px] font-mono text-muted">
+                          <span className="text-[11px]  text-muted">
                             {fmtDate(m.date)}
                           </span>
                         </div>
@@ -3528,16 +3603,16 @@ export default function Report() {
                         <div className="flex items-center justify-between text-xs pt-1 border-t border-border/40">
                           <div>
                             {m.stockIn > 0 ? (
-                              <span className="text-success font-mono font-bold">
+                              <span className="text-success  font-bold">
                                 +{m.stockIn} boxes {m.isReturn ? "(Return)" : ""}
                               </span>
                             ) : (
-                              <span className="text-danger font-mono font-bold">
+                              <span className="text-danger  font-bold">
                                 -{m.stockOut} boxes
                               </span>
                             )}
                           </div>
-                          <span className="font-mono font-bold text-foreground">
+                          <span className=" font-bold text-foreground">
                             Bal: {m.balance.toLocaleString()} boxes
                           </span>
                         </div>
@@ -3663,7 +3738,7 @@ export default function Report() {
               <div className="text-[11px] font-semibold text-primary uppercase tracking-wide mb-1">
                 Total Received
               </div>
-              <div className="text-xl sm:text-2xl text-primary font-mono font-bold">
+              <div className="text-xl sm:text-2xl text-primary  font-bold">
                 {fmt(paymentsTotal)}
               </div>
             </div>
@@ -3679,7 +3754,7 @@ export default function Report() {
                   <div className="text-[11px] font-semibold text-muted uppercase tracking-wide mb-1 capitalize">
                     {mode === "telephone" ? "Mobile Money" : mode}
                   </div>
-                  <div className="text-base sm:text-lg text-foreground font-mono font-bold">
+                  <div className="text-base sm:text-lg text-foreground  font-bold">
                     {fmt(modeTotal)}
                   </div>
                 </div>
@@ -3797,7 +3872,7 @@ export default function Report() {
                   key: p.id,
                   cells: [
                     fmtDate(p.date),
-                    getName(p.clientId, clients),
+                    getPaymentPartyName(p),
                     fmt(p.amount),
                     p.mode === "telephone"
                       ? "Mobile Money"
@@ -3806,7 +3881,7 @@ export default function Report() {
                         : "Cash",
                     paymentReference(p),
                   ],
-                  mobileTitle: getName(p.clientId, clients),
+                  mobileTitle: getPaymentPartyName(p),
                   mobileSub: paymentReference(p),
                   mobileLeft:
                     p.mode === "telephone"
@@ -4087,25 +4162,13 @@ function DetailTable({
                 } ${i === rows.length - 1 ? "border-b-0" : ""}`}
               >
                 {row.cells.map((cell, ci) => {
-                  const isLast = ci === row.cells.length - 1;
                   const isAmount = cell.includes(",") || cell.startsWith("RWF");
-                  if (isLast && row.status) {
-                    return (
-                      <td key={ci} className="px-4 py-3">
-                        <span
-                          className={`inline-flex items-center text-[10px] font-semibold px-2.5 py-1 rounded whitespace-nowrap ${row.status.className}`}
-                        >
-                          {row.status.label}
-                        </span>
-                      </td>
-                    );
-                  }
                   return (
                     <td
                       key={ci}
                       className={`px-4 py-3 whitespace-nowrap ${
                         isAmount || ci >= 2
-                          ? "text-xs font-mono font-semibold text-foreground"
+                          ? "text-xs  font-semibold text-foreground"
                           : "text-xs text-foreground"
                       }`}
                     >
@@ -4113,6 +4176,15 @@ function DetailTable({
                     </td>
                   );
                 })}
+                {row.status && (
+                  <td className="px-4 py-3">
+                    <span
+                      className={`inline-flex items-center text-[10px] font-semibold px-2.5 py-1 rounded whitespace-nowrap ${row.status.className}`}
+                    >
+                      {row.status.label}
+                    </span>
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
@@ -4133,7 +4205,7 @@ function DetailTable({
                   {row.status.label}
                 </span>
               ) : (
-                <span className="text-sm font-mono font-semibold text-foreground flex-shrink-0">
+                <span className="text-sm  font-semibold text-foreground flex-shrink-0">
                   {row.mobileRight}
                 </span>
               )}
@@ -4144,7 +4216,7 @@ function DetailTable({
             <div className="flex items-center justify-between text-xs text-muted">
               <span>{row.mobileLeft}</span>
               {row.status && (
-                <span className="font-mono font-semibold text-foreground">
+                <span className=" font-semibold text-foreground">
                   {row.mobileRight}
                 </span>
               )}
@@ -4186,15 +4258,54 @@ function ManagerMarketingReports({
   setCustomFrom: (v: string) => void;
   setCustomTo: (v: string) => void;
 }) {
-  const [mergeAgentIds, setMergeAgentIds] = useState<string[]>([]);
-const [section, setSection] = useState <
-  "sales" | "salesOnly" | "loanOnly" | "clients" | "payments" | "versaiment"
+  const [section, setSection] = useState <
+"sales" | "salesOnly" | "loanOnly" | "clients" | "payments" | "versaiment"
 >("clients");
-  const [isExportingExcel, setIsExportingExcel] = useState(false);
+const [isExportingExcel, setIsExportingExcel] = useState(false);
+const [mergeAgentIds, setMergeAgentIds] = useState<string[]>([]);
+
+const isMerging = mergeAgentIds.length >= 2;
+const singleAgentId = mergeAgentIds.length === 1 ? mergeAgentIds[0] : null;
+
+  const { state } = useStore();
+  const { from: reconFrom, to: reconTo } = dateRangeBounds(dateFilter, customFrom, customTo);
+  const {
+    expenses: managerReconciliationExpenses,
+    addExpense: addManagerReconciliationExpense,
+    updateExpense: updateManagerReconciliationExpense,
+    deleteExpense: deleteManagerReconciliationExpense,
+    error: managerReconciliationError,
+  } = useReconciliationExpenses(singleAgentId ?? undefined, reconFrom, reconTo);
+
+  const [newExpenseName, setNewExpenseName] = useState("");
+  const [newExpenseAmount, setNewExpenseAmount] = useState("");
+  const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null);
+  const [editExpenseName, setEditExpenseName] = useState("");
+  const [editExpenseAmount, setEditExpenseAmount] = useState("");
+  const [isSavingExpense, setIsSavingExpense] = useState(false);
+
+  const handleAddManagerExpense = async () => {
+    if (!newExpenseName.trim() || !Number(newExpenseAmount)) return;
+    setIsSavingExpense(true);
+    await addManagerReconciliationExpense(
+      newExpenseName.trim(),
+      Number(newExpenseAmount),
+      state.user?.name ?? "Manager",
+      state.user?.id ?? "",
+    );
+    setNewExpenseName("");
+    setNewExpenseAmount("");
+    setIsSavingExpense(false);
+  };
 
   const inDateRange = (date: string) => inRange(date, dateFilter, customFrom, customTo);
   const getName = (id: string, list: { id: string; name: string }[]) =>
     list.find((i) => i.id === id)?.name ?? "—";
+  const getPaymentPartyName = (p: { clientId?: string; reportId?: string }) => {
+    if (p.clientId) return getName(p.clientId, clients);
+    const report = activeReports.find((r) => r.id === p.reportId);
+    return report?.customerName?.trim() || "Walk-in customer";
+  };
   const getReportRemaining = (report: any) => {
     const paid = payments
       .filter((p: any) => p.reportId === report.id)
@@ -4204,8 +4315,6 @@ const [section, setSection] = useState <
   const getProductName = (id: string) => products.find((p: any) => p.id === id)?.name ?? "—";
   const getBankName = (id?: string) => (id ? banks.find((b: any) => b.id === id)?.name ?? "—" : "—");
 
-  const isMerging = mergeAgentIds.length >= 2;
-  const singleAgentId = mergeAgentIds.length === 1 ? mergeAgentIds[0] : null;
   const mergeableIds: (typeof section)[] = ["clients", "loanOnly"];
   const activeSection =
     isMerging && !mergeableIds.includes(section) ? "clients" : section;
@@ -4276,8 +4385,10 @@ const [section, setSection] = useState <
         return {
           key: r.id,
           date: r.date,
-          clientName: client?.name ?? "—",
+          clientName: client?.name ?? r.customerName ?? "Walk-in customer",
+          phone: client?.phone ?? "—",
           district: client?.district ?? "—",
+          center: client?.center ?? "—",
           product: getProductName(r.productId),
           qty: r.qty,
           totalPrice: r.totalPrice,
@@ -4346,8 +4457,8 @@ const [section, setSection] = useState <
           : "—";
         return {
           key: p.id,
-          cells: [fmtDate(p.date), client?.name ?? "—", fmt(p.amount), p.mode === "telephone" ? "Mobile Money" : p.mode === "bank" ? "Bank" : "Cash", ref],
-          mobileTitle: client?.name ?? "—",
+          cells: [fmtDate(p.date), getPaymentPartyName(p), fmt(p.amount), p.mode === "telephone" ? "Mobile Money" : p.mode === "bank" ? "Bank" : "Cash", ref],
+          mobileTitle: getPaymentPartyName(p),
           mobileSub: ref,
           mobileLeft: p.mode === "telephone" ? "Mobile Money" : p.mode === "bank" ? "Bank" : "Cash",
           mobileRight: fmt(p.amount),
@@ -4407,15 +4518,168 @@ const [section, setSection] = useState <
   };
 
   /* ---------------- export ---------------- */
+
+  const buildAgentSalesLoanExportRows = (agentId: string) => {
+    const rows: any[] = [];
+    [...agentReportsInRange(agentId)].sort((a, b) => a.date.localeCompare(b.date)).forEach((r: any) => {
+      const client = clients.find((c: any) => c.id === r.clientId);
+      const reportPayments = payments
+        .filter((p: any) => p.reportId === r.id)
+        .sort((a: any, b: any) => a.date.localeCompare(b.date));
+      const methodLabel = (p: any) =>
+        p.mode === "telephone" ? `Mobile Money — ${p.receiverName || "—"}` : p.mode === "bank" ? "Bank" : "Cash";
+
+      if (reportPayments.length === 0) {
+        rows.push({
+          key: r.id, reportId: r.id, date: r.date,
+          clientName: client?.name ?? r.customerName ?? "Walk-in customer",
+          phone: client?.phone ?? "—", district: client?.district ?? "—", center: client?.center ?? "—",
+          product: getProductName(r.productId), qty: r.qty, unitPrice: r.unitPrice, totalPrice: r.totalPrice,
+          paymentDate: null, amountPaid: null, method: null, remaining: r.totalPrice,
+        });
+        return;
+      }
+      let cumulativePaid = 0;
+      reportPayments.forEach((p: any) => {
+        cumulativePaid += p.amount;
+        rows.push({
+          key: `${r.id}-${p.id}`, reportId: r.id, date: r.date,
+          clientName: client?.name ?? r.customerName ?? "Walk-in customer",
+          phone: client?.phone ?? "—", district: client?.district ?? "—", center: client?.center ?? "—",
+          product: getProductName(r.productId), qty: r.qty, unitPrice: r.unitPrice, totalPrice: r.totalPrice,
+          paymentDate: p.date, amountPaid: p.amount, method: methodLabel(p),
+          remaining: Math.max(0, r.totalPrice - cumulativePaid),
+        });
+      });
+    });
+    return rows.sort((a, b) => {
+      const d = a.date.localeCompare(b.date);
+      return d !== 0 ? d : (a.paymentDate ?? "").localeCompare(b.paymentDate ?? "");
+    });
+  };
+
+  const versaimentRowsRaw = (agentId: string) => {
+    const p = paymentsInRange(agentId);
+    const e = expensesInRange(agentId);
+    const days = Array.from(new Set([...p.map((x: any) => x.date), ...e.map((x: any) => x.date)])).sort();
+    return days
+      .map((date) => {
+        const dCash = p.filter((x: any) => x.date === date && x.mode === "cash").reduce((s: number, x: any) => s + x.amount, 0);
+        const dTel = p.filter((x: any) => x.date === date && x.mode === "telephone").reduce((s: number, x: any) => s + x.amount, 0);
+        const dExp = e.filter((x: any) => x.date === date).reduce((s: number, x: any) => s + x.amount, 0);
+        if (dCash <= 0 && dTel <= 0) return null;
+        const record = versaimentMap[keyFor(agentId, date)];
+        const source = record?.source ?? (dCash > 0 ? "cash" : "telephone");
+        const amount = (source === "cash" ? dCash : dTel) - dExp;
+        return { date, amount, source, approved: Boolean(record?.approved), versaimentDate: record?.versaimentDate, madeBy: record?.madeBy };
+      })
+      .filter((r): r is NonNullable<typeof r> => r !== null);
+  };
+
+  const buildAgentPaymentsExport = (agentId: string) => {
+    const payInRange = paymentsInRange(agentId);
+    const expInRange = expensesInRange(agentId);
+    const dayKeys = Array.from(new Set([...payInRange.map((p: any) => p.date), ...expInRange.map((e: any) => e.date)])).sort((a, b) => a.localeCompare(b));
+    const getReportDateFor = (reportId?: string) =>
+      reportId ? activeReports.find((r: any) => r.id === reportId && r.agentId === agentId)?.date : undefined;
+
+    const exportRows: (string | number)[][] = [];
+    dayKeys.forEach((date) => {
+      const dayPayments = payInRange.filter((p: any) => p.date === date);
+      const dayExpenses = expInRange.filter((e: any) => e.date === date);
+      const cash = dayPayments.filter((p: any) => p.mode === "cash");
+      const bank = dayPayments.filter((p: any) => p.mode === "bank");
+      const tel = dayPayments.filter((p: any) => p.mode === "telephone");
+
+      exportRows.push([`— ${fmtDate(date)} —`, "", "", "", "", "", "", "", "", ""]);
+
+      cash.forEach((p: any) => {
+        const client = clients.find((c: any) => c.id === p.clientId);
+        const loanDate = getReportDateFor(p.reportId);
+        exportRows.push([loanDate ? fmtDate(loanDate) : "—", getPaymentPartyName(p), fmt(p.amount), fmtDate(p.date), "", "", "", "", "", ""]);
+      });
+      bank.forEach((p: any) => {
+        const client = clients.find((c: any) => c.id === p.clientId);
+        const loanDate = getReportDateFor(p.reportId);
+        const bankLabel = getBankName(p.bankId) + (p.receiverName ? ` — ${p.receiverName}` : "");
+        exportRows.push([loanDate ? fmtDate(loanDate) : "—", getPaymentPartyName(p), "", "", fmt(p.amount), fmtDate(p.date), bankLabel, "", "", ""]);
+      });
+      tel.forEach((p: any) => {
+        const client = clients.find((c: any) => c.id === p.clientId);
+        const loanDate = getReportDateFor(p.reportId);
+        exportRows.push([loanDate ? fmtDate(loanDate) : "—", getPaymentPartyName(p), "", "", "", "", "", fmt(p.amount), p.receiverName || "—", ""]);
+      });
+      dayExpenses.forEach((e: any) => {
+        exportRows.push(["—", e.name, "", "", "", "", "", "", "", fmt(e.amount)]);
+      });
+
+      const dCash = cash.reduce((s: number, p: any) => s + p.amount, 0);
+      const dBank = bank.reduce((s: number, p: any) => s + p.amount, 0);
+      const dTel = tel.reduce((s: number, p: any) => s + p.amount, 0);
+      const dExp = dayExpenses.reduce((s: number, e: any) => s + e.amount, 0);
+      exportRows.push([`Subtotal — ${fmtDate(date)}`, "", fmt(dCash), "", fmt(dBank), "", "", fmt(dTel), "", fmt(dExp)]);
+
+      const versaimentRecord = versaimentMap[keyFor(agentId, date)];
+      const versaimentSource = versaimentRecord?.source ?? (dCash > 0 ? "cash" : "telephone");
+      const dVersaiment = (versaimentSource === "cash" ? dCash : dTel) - dExp;
+      exportRows.push([`Versaiment — ${fmtDate(date)}: ${fmt(dVersaiment)}${versaimentRecord?.madeBy ? ` — by ${versaimentRecord.madeBy}` : ""}`, "", "", "", "", "", "", "", "", ""]);
+    });
+
+    const t = paymentTotals(agentId);
+    const versaimentTotal = versaimentRowsRaw(agentId).reduce((s, r) => s + r.amount, 0);
+    exportRows.push([`Total Cash — ${dateLabel[dateFilter]}`, "", fmt(t.cash), "", fmt(t.bank), "", "", fmt(t.telephone), "", fmt(t.expense)]);
+    exportRows.push([`Total Versaiment: ${fmt(versaimentTotal)}`, "", "", "", "", "", "", "", "", ""]);
+
+    // Pull in the real saved reconciliation expenses for this agent so the
+    // exported report matches what's shown on screen (Total Amount(MOMO) card).
+    const reconciliationExpensesTotal = managerReconciliationExpenses.reduce(
+      (s, e) => s + (e.amount || 0),
+      0,
+    );
+    const reconciliationRemaining = t.telephone - reconciliationExpensesTotal;
+    const reconciliationRows: (string | number)[][] = [
+      ["Total", fmt(t.telephone)],
+      ...managerReconciliationExpenses.map((e) => [e.name || "Expense", fmt(e.amount)]),
+      ["Remaining", fmt(reconciliationRemaining)],
+    ];
+
+    return {
+      summary: [
+        `Cash: ${fmt(t.cash)}`, `Bank: ${fmt(t.bank)}`, `Mobile Money: ${fmt(t.telephone)}`,
+        `Depense: ${fmt(t.expense)}`, `Versaiment: ${fmt(versaimentTotal)}`,
+        `Reconciliation Remaining: ${fmt(reconciliationRemaining)}`,
+      ],
+      sections: [
+        {
+          heading: "Payments & Expenses",
+          groupHeaders: [
+            { label: "Date", span: 1 }, { label: "Client / Category", span: 1 },
+            { label: "CASH", span: 2 }, { label: "BANK", span: 3 },
+            { label: "TELEPHONE", span: 2 }, { label: "Depenses", span: 1 },
+          ],
+          headers: ["Date", "Client / Category", "Amount", "Payment Date", "Amount", "Payment Date", "Bank", "Amount", "Receiver", "Amount"],
+          rows: exportRows,
+          numericColumns: [2, 4, 7, 9],
+        },
+        {
+          heading: "Total Amount(MOMO)",
+          headers: ["Item", "Amount"],
+          rows: reconciliationRows,
+          numericColumns: [1],
+        },
+      ],
+    };
+  };
+
   const buildExportData = (): { meta: ReportMeta; summary: string[]; sections: ReportSection[] } => {
     const scope = isMerging ? `${mergeAgentIds.length} Agents (Merged)` : singleAgentId ? getName(singleAgentId, agents) : "All Agents";
     const meta: ReportMeta = {
       title:
-        activeSection === "clients" ? "Marketing Agents — Clients Report"
-        : activeSection === "loanOnly" ? "Marketing Agents — Loan Report"
+        activeSection === "clients" ? (isMerging ? "Marketing Agents — Clients Report" : "My Clients Report")
+        : activeSection === "loanOnly" ? "Loan Report"
         : activeSection === "salesOnly" ? "Sales Report"
         : activeSection === "sales" ? "Sales & Loan Report"
-        : activeSection === "payments" ? "Payments Report"
+        : activeSection === "payments" ? "Agent Payments Report"
         : "Versaiment Report",
       period: dateLabel[dateFilter],
       scope,
@@ -4425,34 +4689,41 @@ const [section, setSection] = useState <
     if (isMerging && activeSection === "clients") {
       const rows: (string | number)[][] = [];
       mergedClientGroups.forEach((g) => {
-        rows.push([`— ${g.agentName} —`, "", "", ""]);
+        rows.push([`— ${g.agentName} —`, "", "", "", "", ""]);
         g.rows.forEach(({ client, outstanding }) =>
-          rows.push([client.name, client.phone, client.district, outstanding > 0 ? fmt(outstanding) : "Settled"]),
+          rows.push([client.name, client.phone, client.district, client.sector, client.center, outstanding > 0 ? fmt(outstanding) : "Settled"]),
         );
-        rows.push([`Subtotal — ${g.agentName}`, "", "", fmt(g.subtotal)]);
+        rows.push([`Subtotal — ${g.agentName}`, "", "", "", "", fmt(g.subtotal)]);
       });
-      rows.push([`Subtotal — All Agents`, "", "", fmt(mergedClientsGrandTotal)]);
+      rows.push([`Subtotal — All Agents`, "", "", "", "", fmt(mergedClientsGrandTotal)]);
       return {
         meta,
         summary: [`Agents: ${mergeAgentIds.length}`, `Total Outstanding: ${fmt(mergedClientsGrandTotal)}`],
-        sections: [{ heading: "Clients by Agent", headers: ["Client", "Telephone", "District", "Outstanding"], rows, numericColumns: [3] }],
+        sections: [{ heading: "Clients by Agent", headers: ["Client", "Telephone", "District", "Sector", "Center", "Outstanding"], rows, numericColumns: [5] }],
       };
     }
 
     if (isMerging && activeSection === "loanOnly") {
       const rows: (string | number)[][] = [];
       mergedLoanGroups.forEach((g) => {
-        rows.push([`— ${g.agentName} —`, "", "", "", "", "", ""]);
-        g.rows.forEach((r) =>
-          rows.push([fmtDate(r.date), r.clientName, r.product, r.qty, fmt(r.totalPrice), fmt(r.paid), r.remaining > 0 ? fmt(r.remaining) : "Settled"]),
-        );
-        rows.push([`Subtotal — ${g.agentName}`, "", "", "", fmt(g.issued), fmt(g.paid), fmt(g.outstanding)]);
+        rows.push([`— ${g.agentName} —`, "", "", "", "", "", "", "", "", ""]);
+        const sortedRows = [...g.rows].sort((a, b) => a.clientName.localeCompare(b.clientName) || a.date.localeCompare(b.date));
+        const spans = computeRowSpans(sortedRows, (r) => r.clientName);
+        sortedRows.forEach((r, i) => {
+          const first = spans[i] > 0;
+          rows.push([
+            first ? r.clientName : "", first ? r.phone : "", first ? r.district : "", first ? r.center : "",
+            fmtDate(r.date), r.product, r.qty, fmt(r.totalPrice), fmt(r.paid),
+            r.remaining > 0 ? fmt(r.remaining) : "Settled",
+          ]);
+        });
+        rows.push([`Subtotal — ${g.agentName}`, "", "", "", "", "", "", fmt(g.issued), fmt(g.paid), fmt(g.outstanding)]);
       });
-      rows.push([`Subtotal — All Agents`, "", "", "", fmt(mergedLoanGrand.issued), fmt(mergedLoanGrand.paid), fmt(mergedLoanGrand.outstanding)]);
+      rows.push([`Subtotal — All Agents`, "", "", "", "", "", "", fmt(mergedLoanGrand.issued), fmt(mergedLoanGrand.paid), fmt(mergedLoanGrand.outstanding)]);
       return {
         meta,
         summary: [`Agents: ${mergeAgentIds.length}`, `Issued: ${fmt(mergedLoanGrand.issued)}`, `Paid: ${fmt(mergedLoanGrand.paid)}`, `Outstanding: ${fmt(mergedLoanGrand.outstanding)}`],
-        sections: [{ heading: "Loans by Agent", headers: ["Date", "Client", "Product", "Qty", "Total", "Paid", "Remaining"], rows, numericColumns: [3, 4, 5, 6] }],
+        sections: [{ heading: "Loans by Agent", headers: ["Client", "Telephone", "District", "Center", "Date", "Product", "Qty", "Total", "Paid", "Remaining"], rows, numericColumns: [6, 7, 8, 9] }],
       };
     }
 
@@ -4460,83 +4731,126 @@ const [section, setSection] = useState <
     if (!id) return { meta, summary: [], sections: [] };
 
     if (activeSection === "clients") {
+      const rows = clientRowsRaw(id);
       return {
         meta,
-        summary: [`Clients: ${clientRowsRaw(id).length}`],
-        sections: [{ heading: "Clients", headers: ["Client", "Telephone", "District", "Outstanding"],
-          rows: clientRowsRaw(id).map(({ client, outstanding }) => [client.name, client.phone, client.district, outstanding > 0 ? fmt(outstanding) : "Settled"]),
-          numericColumns: [3] }],
+        summary: [`Clients Handled: ${rows.length}`, `Total Outstanding: ${fmt(rows.reduce((s, r) => s + r.outstanding, 0))}`],
+        sections: [{
+          heading: "My Clients",
+          headers: ["Client", "Telephone", "District", "Sector", "Center", "Outstanding"],
+          rows: rows.map(({ client, outstanding }) => [client.name, client.phone, client.district, client.sector, client.center, outstanding > 0 ? fmt(outstanding) : "Settled"]),
+          numericColumns: [5],
+        }],
       };
     }
+
     if (activeSection === "loanOnly") {
-      const rows = loanRowsRaw(id);
+      const raw = loanRowsRaw(id).sort((a, b) => a.clientName.localeCompare(b.clientName) || a.date.localeCompare(b.date));
+      const spans = computeRowSpans(raw, (r) => r.clientName);
       return {
         meta,
-        summary: [`Loan Entries: ${rows.length}`],
-        sections: [{ heading: "Loan Detail", headers: ["Date", "Client", "District", "Product", "Qty", "Total", "Paid", "Remaining"],
-          rows: rows.map((r) => [fmtDate(r.date), r.clientName, r.district, r.product, r.qty, fmt(r.totalPrice), fmt(r.paid), r.remaining > 0 ? fmt(r.remaining) : "Settled"]),
-          numericColumns: [4, 5, 6, 7] }],
+        summary: [
+          `Loans Issued: ${fmt(raw.reduce((s, r) => s + r.totalPrice, 0))}`,
+          `Paid So Far: ${fmt(raw.reduce((s, r) => s + r.paid, 0))}`,
+          `Outstanding: ${fmt(raw.reduce((s, r) => s + r.remaining, 0))}`,
+          `Loan Entries: ${raw.length}`,
+        ],
+        sections: [{
+          heading: "Loan Detail",
+          headers: ["Client", "Telephone", "District", "Center", "Date", "Product", "Qty", "Total Price", "Paid So Far", "Remaining"],
+          rows: raw.map((r, i) => {
+            const first = spans[i] > 0;
+            return [
+              first ? r.clientName : "", first ? r.phone : "", first ? r.district : "", first ? r.center : "",
+              fmtDate(r.date), r.product, r.qty, fmt(r.totalPrice), fmt(r.paid),
+              r.remaining > 0 ? fmt(r.remaining) : "Settled",
+            ];
+          }),
+          numericColumns: [6, 7, 8, 9],
+        }],
       };
     }
+
     if (activeSection === "salesOnly") {
-      const rows = agentReportsInRange(id);
+      const rowsRaw = agentReportsInRange(id).map((r: any) => {
+        const client = clients.find((c: any) => c.id === r.clientId);
+        return {
+          date: r.date, clientName: client?.name ?? r.customerName ?? "Walk-in customer",
+          phone: client?.phone ?? "—", district: client?.district ?? "—", center: client?.center ?? "—",
+          product: getProductName(r.productId), qty: r.qty, unitPrice: r.unitPrice, totalPrice: r.totalPrice, status: r.paymentStatus,
+        };
+      });
+      const spans = computeRowSpans(rowsRaw, (r) => r.date);
       return {
         meta,
-        summary: [`Transactions: ${rows.length}`],
-        sections: [{ heading: "Sales Detail", headers: ["Date", "Client", "Product", "Qty", "Total", "Status"],
-          rows: rows.map((r: any) => {
-            const client = clients.find((c: any) => c.id === r.clientId);
-            return [fmtDate(r.date), client?.name ?? r.customerName ?? "Walk-in customer", getProductName(r.productId), r.qty, fmt(r.totalPrice), r.paymentStatus === "paid" ? "Paid" : "Loan"];
-          }),
-          numericColumns: [3, 4] }],
+        summary: [
+          `Total Sales: ${fmt(rowsRaw.reduce((s, r) => s + r.totalPrice, 0))}`,
+          `Boxes Sold: ${rowsRaw.reduce((s, r) => s + r.qty, 0).toLocaleString()}`,
+          `Total Transactions: ${rowsRaw.length}`,
+        ],
+        sections: [{
+          heading: "Sales Detail",
+          headers: ["Date", "Client", "Telephone", "District", "Center", "Product", "Qty", "Unit Price", "Total Price", "Status"],
+          rows: rowsRaw.map((r, i) => [
+            spans[i] > 0 ? fmtDate(r.date) : "", r.clientName, r.phone, r.district, r.center, r.product,
+            r.qty, fmt(r.unitPrice), fmt(r.totalPrice), r.status === "paid" ? "Paid" : "Loan",
+          ]),
+          numericColumns: [6, 7, 8],
+        }],
       };
     }
+
     if (activeSection === "sales") {
-      const rows = agentReportsInRange(id);
+      const rows = buildAgentSalesLoanExportRows(id);
+      const spans = computeRowSpans(rows, (r) => r.reportId);
       return {
         meta,
-        summary: [`Transactions: ${rows.length}`],
-        sections: [{ heading: "Sales & Loan Detail", headers: ["Date", "Client", "Product", "Qty", "Total", "Paid", "Remaining"],
-          rows: rows.map((r: any) => {
-            const client = clients.find((c: any) => c.id === r.clientId);
-            const paid = payments.filter((p: any) => p.reportId === r.id).reduce((s: number, p: any) => s + p.amount, 0);
-            const remaining = Math.max(0, r.totalPrice - paid);
-            return [fmtDate(r.date), client?.name ?? r.customerName ?? "Walk-in customer", getProductName(r.productId), r.qty, fmt(r.totalPrice), fmt(paid), remaining > 0 ? fmt(remaining) : "Settled"];
+        summary: [`Transactions: ${agentReportsInRange(id).length}`],
+        sections: [{
+          heading: "Sales & Loan Detail",
+          headers: ["Date", "Client", "Telephone", "District", "Center", "Product", "Qty", "Unit Price", "Total Price", "Payment Date", "Amount Paid", "Method", "Remaining"],
+          rows: rows.map((row, i) => {
+            const first = spans[i] > 0;
+            return [
+              first ? fmtDate(row.date) : "", first ? row.clientName : "", first ? row.phone : "", first ? row.district : "",
+              first ? row.center : "", first ? row.product : "", first ? row.qty : "", first ? fmt(row.unitPrice) : "", first ? fmt(row.totalPrice) : "",
+              row.paymentDate ? fmtDate(row.paymentDate) : "—", row.amountPaid != null ? fmt(row.amountPaid) : "—", row.method ?? "—",
+              row.remaining > 0 ? fmt(row.remaining) : "Settled",
+            ];
           }),
-          numericColumns: [3, 4, 5] }],
+          numericColumns: [6, 7, 8, 10, 12],
+        }],
       };
     }
+
     if (activeSection === "payments") {
-      const t = paymentTotals(id);
-      const rows = paymentsInRange(id).slice().sort((a: any, b: any) => a.date.localeCompare(b.date));
-      return {
-        meta,
-        summary: [`Cash: ${fmt(t.cash)}`, `Bank: ${fmt(t.bank)}`, `Mobile Money: ${fmt(t.telephone)}`, `Depense: ${fmt(t.expense)}`],
-        sections: [{ heading: "Payments", headers: ["Date", "Client", "Amount", "Mode", "Reference"],
-          rows: rows.map((p: any) => {
-            const client = clients.find((c: any) => c.id === p.clientId);
-            const ref =
-              p.mode === "bank" && p.bankId
-                ? getBankName(p.bankId) + (p.receiverName ? ` — ${p.receiverName}` : "")
-                : p.mode === "telephone" && p.receiverName
-                  ? `Receiver: ${p.receiverName}`
-                  : "—";
-            return [fmtDate(p.date), client?.name ?? "—", fmt(p.amount), p.mode === "telephone" ? "Mobile Money" : p.mode === "bank" ? "Bank" : "Cash", ref];
-          }),
-          numericColumns: [2] }],
-      };
+      const { summary, sections } = buildAgentPaymentsExport(id);
+      return { meta, summary, sections };
     }
-    const vRows = versaimentRows(id);
+
+    // versaiment
+    const rows = versaimentRowsRaw(id);
     return {
       meta,
-      summary: [`Days: ${vRows.length}`],
-      sections: [{ heading: "Versaiment", headers: ["Date", "Source", "Amount", "Status"],
-        rows: vRows.map((r) => [r.cells[0], r.cells[1], r.cells[2], r.status?.label ?? ""]),
-        numericColumns: [2] }],
+      summary: [
+        `Total Versaiment: ${fmt(rows.reduce((s, r) => s + r.amount, 0))}`,
+        `Pending: ${fmt(rows.filter((r) => !r.approved).reduce((s, r) => s + r.amount, 0))}`,
+        `Approved: ${fmt(rows.filter((r) => r.approved).reduce((s, r) => s + r.amount, 0))}`,
+        `Days Recorded: ${rows.length}`,
+      ],
+      sections: [{
+        heading: "Versaiment Detail",
+        headers: ["Date", "Source", "Amount", "Status", "Versaiment Date", "Made By"],
+        rows: rows.map((r) => [
+          fmtDate(r.date), r.source === "cash" ? "Cash" : "Mobile Money", fmt(r.amount),
+          r.approved ? "Approved" : "Pending", r.versaimentDate ? fmtDate(r.versaimentDate) : "—", r.madeBy ?? "—",
+        ]),
+        numericColumns: [2],
+      }],
     };
   };
 
-  const filenameBase = () => `soapflow-manager-marketing-${activeSection}-${today()}`;
+  const filenameBase = () => `kangaroo-manager-marketing-${activeSection}-${today()}`;
   const handleExportPdf = () => {
     const { meta, summary, sections } = buildExportData();
     buildPdfReport(meta, summary, sections, `${filenameBase()}.pdf`, "landscape");
@@ -4712,19 +5026,19 @@ const [section, setSection] = useState <
                               <td className="px-4 py-2.5 text-xs font-medium text-foreground whitespace-nowrap">{client.name}</td>
                               <td className="px-4 py-2.5 text-xs text-muted whitespace-nowrap">{client.phone}</td>
                               <td className="px-4 py-2.5 text-xs text-muted whitespace-nowrap">{client.district}</td>
-                              <td className="px-4 py-2.5 text-xs font-mono text-secondary">{outstanding > 0 ? fmt(outstanding) : <span className="text-success">Settled</span>}</td>
+                              <td className="px-4 py-2.5 text-xs  text-secondary">{outstanding > 0 ? fmt(outstanding) : <span className="text-success">Settled</span>}</td>
                             </tr>
                           ))
                         )}
                         <tr className="bg-accent/40">
                           <td colSpan={3} className="px-4 py-2.5 text-xs font-bold text-foreground">Subtotal — {g.agentName}</td>
-                          <td className="px-4 py-2.5 text-xs font-mono font-bold text-secondary">{fmt(g.subtotal)}</td>
+                          <td className="px-4 py-2.5 text-xs  font-bold text-secondary">{fmt(g.subtotal)}</td>
                         </tr>
                       </FragmentDay>
                     ))}
                     <tr className="bg-primary text-white">
                       <td colSpan={3} className="px-4 py-3 text-xs font-bold uppercase tracking-wide">Grand Total — All Agents</td>
-                      <td className="px-4 py-3 text-xs font-mono font-bold">{fmt(mergedClientsGrandTotal)}</td>
+                      <td className="px-4 py-3 text-xs  font-bold">{fmt(mergedClientsGrandTotal)}</td>
                     </tr>
                   </tbody>
                 </table>
@@ -4760,29 +5074,29 @@ const [section, setSection] = useState <
                         ) : (
                           g.rows.map((r, i) => (
                             <tr key={r.key} className={i % 2 === 1 ? "bg-background/50" : ""}>
-                              <td className="px-3 py-2.5 text-xs font-mono text-muted whitespace-nowrap">{fmtDate(r.date)}</td>
+                              <td className="px-3 py-2.5 text-xs  text-muted whitespace-nowrap">{fmtDate(r.date)}</td>
                               <td className="px-3 py-2.5 text-xs text-foreground whitespace-nowrap">{r.clientName}</td>
                               <td className="px-3 py-2.5 text-xs text-foreground whitespace-nowrap">{r.product}</td>
-                              <td className="px-3 py-2.5 text-xs font-mono text-muted">{r.qty}</td>
+                              <td className="px-3 py-2.5 text-xs  text-muted">{r.qty}</td>
                               <td className="px-3 py-2.5 text-xs font-semibold text-foreground">{fmt(r.totalPrice)}</td>
-                              <td className="px-3 py-2.5 text-xs font-mono text-success">{fmt(r.paid)}</td>
-                              <td className="px-3 py-2.5 text-xs font-mono text-secondary">{r.remaining > 0 ? fmt(r.remaining) : <span className="text-success">Settled</span>}</td>
+                              <td className="px-3 py-2.5 text-xs  text-success">{fmt(r.paid)}</td>
+                              <td className="px-3 py-2.5 text-xs  text-secondary">{r.remaining > 0 ? fmt(r.remaining) : <span className="text-success">Settled</span>}</td>
                             </tr>
                           ))
                         )}
                         <tr className="bg-accent/40">
                           <td colSpan={4} className="px-3 py-2.5 text-xs font-bold text-foreground">Subtotal — {g.agentName}</td>
-                          <td className="px-3 py-2.5 text-xs font-mono font-bold">{fmt(g.issued)}</td>
-                          <td className="px-3 py-2.5 text-xs font-mono font-bold text-success">{fmt(g.paid)}</td>
-                          <td className="px-3 py-2.5 text-xs font-mono font-bold text-secondary">{fmt(g.outstanding)}</td>
+                          <td className="px-3 py-2.5 text-xs  font-bold">{fmt(g.issued)}</td>
+                          <td className="px-3 py-2.5 text-xs  font-bold text-success">{fmt(g.paid)}</td>
+                          <td className="px-3 py-2.5 text-xs  font-bold text-secondary">{fmt(g.outstanding)}</td>
                         </tr>
                       </FragmentDay>
                     ))}
                     <tr className="bg-primary text-white">
                       <td colSpan={4} className="px-3 py-3 text-xs font-bold uppercase tracking-wide">Grand Total — All Agents</td>
-                      <td className="px-3 py-3 text-xs font-mono font-bold">{fmt(mergedLoanGrand.issued)}</td>
-                      <td className="px-3 py-3 text-xs font-mono font-bold">{fmt(mergedLoanGrand.paid)}</td>
-                      <td className="px-3 py-3 text-xs font-mono font-bold">{fmt(mergedLoanGrand.outstanding)}</td>
+                      <td className="px-3 py-3 text-xs  font-bold">{fmt(mergedLoanGrand.issued)}</td>
+                      <td className="px-3 py-3 text-xs  font-bold">{fmt(mergedLoanGrand.paid)}</td>
+                      <td className="px-3 py-3 text-xs  font-bold">{fmt(mergedLoanGrand.outstanding)}</td>
                     </tr>
                   </tbody>
                 </table>
@@ -4907,10 +5221,10 @@ const [section, setSection] = useState <
                                       const loanDate = getReportDateFor(pay.reportId);
                                       return (
                                         <tr key={pay.id} className="border-b border-border/40 hover:bg-accent/20">
-                                          <td className="border border-border/40 px-3 py-2 text-xs font-mono text-muted whitespace-nowrap">{loanDate ? fmtDate(loanDate) : "—"}</td>
-                                          <td className="border border-border/40 px-3 py-2 text-xs text-foreground whitespace-nowrap">{client?.name ?? "—"}</td>
-                                          <td className="border border-border/40 px-3 py-2 text-xs font-mono text-success">{fmt(pay.amount)}</td>
-                                          <td className="border border-border/40 px-3 py-2 text-xs font-mono text-muted whitespace-nowrap">{fmtDate(pay.date)}</td>
+                                          <td className="border border-border/40 px-3 py-2 text-xs  text-muted whitespace-nowrap">{loanDate ? fmtDate(loanDate) : "—"}</td>
+                                          <td className="border border-border/40 px-3 py-2 text-xs text-foreground whitespace-nowrap">{getPaymentPartyName(pay)}</td>
+                                          <td className="border border-border/40 px-3 py-2 text-xs  text-success">{fmt(pay.amount)}</td>
+                                          <td className="border border-border/40 px-3 py-2 text-xs  text-muted whitespace-nowrap">{fmtDate(pay.date)}</td>
                                           <td colSpan={3} className="border border-border/40 px-3 py-2 text-xs text-muted/50">—</td>
                                           <td colSpan={2} className="border border-border/40 px-3 py-2 text-xs text-muted/50">—</td>
                                           <td className="border border-border/40 px-3 py-2 text-xs text-muted/50">—</td>
@@ -4923,11 +5237,11 @@ const [section, setSection] = useState <
                                       const loanDate = getReportDateFor(pay.reportId);
                                       return (
                                         <tr key={pay.id} className="border-b border-border/40 hover:bg-accent/20">
-                                          <td className="border border-border/40 px-3 py-2 text-xs font-mono text-muted whitespace-nowrap">{loanDate ? fmtDate(loanDate) : "—"}</td>
-                                          <td className="border border-border/40 px-3 py-2 text-xs text-foreground whitespace-nowrap">{client?.name ?? "—"}</td>
+                                          <td className="border border-border/40 px-3 py-2 text-xs  text-muted whitespace-nowrap">{loanDate ? fmtDate(loanDate) : "—"}</td>
+                                          <td className="border border-border/40 px-3 py-2 text-xs text-foreground whitespace-nowrap">{getPaymentPartyName(pay)}</td>
                                           <td colSpan={2} className="border border-border/40 px-3 py-2 text-xs text-muted/50">—</td>
-                                          <td className="border border-border/40 px-3 py-2 text-xs font-mono text-primary">{fmt(pay.amount)}</td>
-                                          <td className="border border-border/40 px-3 py-2 text-xs font-mono text-muted whitespace-nowrap">{fmtDate(pay.date)}</td>
+                                          <td className="border border-border/40 px-3 py-2 text-xs  text-primary">{fmt(pay.amount)}</td>
+                                          <td className="border border-border/40 px-3 py-2 text-xs  text-muted whitespace-nowrap">{fmtDate(pay.date)}</td>
                                           <td className="border border-border/40 px-3 py-2 text-xs text-muted whitespace-nowrap">{getBankName(pay.bankId)}{pay.receiverName ? ` — ${pay.receiverName}` : ""}</td>
                                           <td colSpan={2} className="border border-border/40 px-3 py-2 text-xs text-muted/50">—</td>
                                         </tr>
@@ -4939,11 +5253,11 @@ const [section, setSection] = useState <
                                       const loanDate = getReportDateFor(pay.reportId);
                                       return (
                                         <tr key={pay.id} className="border-b border-border/40 hover:bg-accent/20">
-                                          <td className="border border-border/40 px-3 py-2 text-xs font-mono text-muted whitespace-nowrap">{loanDate ? fmtDate(loanDate) : "—"}</td>
-                                          <td className="border border-border/40 px-3 py-2 text-xs text-foreground whitespace-nowrap">{client?.name ?? "—"}</td>
+                                          <td className="border border-border/40 px-3 py-2 text-xs  text-muted whitespace-nowrap">{loanDate ? fmtDate(loanDate) : "—"}</td>
+                                          <td className="border border-border/40 px-3 py-2 text-xs text-foreground whitespace-nowrap">{getPaymentPartyName(pay)}</td>
                                           <td colSpan={2} className="border border-border/40 px-3 py-2 text-xs text-muted/50">—</td>
                                           <td colSpan={3} className="border border-border/40 px-3 py-2 text-xs text-muted/50">—</td>
-                                          <td className="border border-border/40 px-3 py-2 text-xs font-mono text-secondary">{fmt(pay.amount)}</td>
+                                          <td className="border border-border/40 px-3 py-2 text-xs  text-secondary">{fmt(pay.amount)}</td>
                                           <td className="border border-border/40 px-3 py-2 text-xs text-muted whitespace-nowrap">{pay.receiverName || "—"}</td>
                                         </tr>
                                       );
@@ -4956,7 +5270,7 @@ const [section, setSection] = useState <
                                         <td colSpan={2} className="border border-border/40 px-3 py-2 text-xs text-muted/50">—</td>
                                         <td colSpan={3} className="border border-border/40 px-3 py-2 text-xs text-muted/50">—</td>
                                         <td colSpan={2} className="border border-border/40 px-3 py-2 text-xs text-muted/50">—</td>
-                                        <td className="border border-border/40 px-3 py-2 text-xs font-mono text-danger">{fmt(exp.amount)}</td>
+                                        <td className="border border-border/40 px-3 py-2 text-xs  text-danger">{fmt(exp.amount)}</td>
                                       </tr>
                                     ))}
 
@@ -4964,10 +5278,10 @@ const [section, setSection] = useState <
                                       <td colSpan={2} className="border border-border/60 px-3 py-2 text-xs font-semibold text-foreground">
                                         Subtotal — {fmtDate(date)}
                                       </td>
-                                      <td colSpan={2} className="border border-border/60 px-3 py-2 text-xs font-mono text-success">{fmt(dCash)}</td>
-                                      <td colSpan={3} className="border border-border/60 px-3 py-2 text-xs font-mono text-primary">{fmt(dBank)}</td>
-                                      <td colSpan={2} className="border border-border/60 px-3 py-2 text-xs font-mono text-secondary">{fmt(dTel)}</td>
-                                      <td className="border border-border/60 px-3 py-2 text-xs font-mono text-danger">{fmt(dExp)}</td>
+                                      <td colSpan={2} className="border border-border/60 px-3 py-2 text-xs  text-success">{fmt(dCash)}</td>
+                                      <td colSpan={3} className="border border-border/60 px-3 py-2 text-xs  text-primary">{fmt(dBank)}</td>
+                                      <td colSpan={2} className="border border-border/60 px-3 py-2 text-xs  text-secondary">{fmt(dTel)}</td>
+                                      <td className="border border-border/60 px-3 py-2 text-xs  text-danger">{fmt(dExp)}</td>
                                     </tr>
                                     <tr className="bg-primary/10">
                                       <td colSpan={10} className="border border-border/60 px-3 py-2">
@@ -4983,10 +5297,10 @@ const [section, setSection] = useState <
                                   <td colSpan={2} className="border border-border/60 px-3 py-2.5 text-xs font-bold uppercase tracking-wide">
                                     Total Cash — {dateLabel[dateFilter]}
                                   </td>
-                                  <td colSpan={2} className="border border-border/60 px-3 py-2.5 text-xs font-mono font-bold">{fmt(grandCash)}</td>
-                                  <td colSpan={3} className="border border-border/60 px-3 py-2.5 text-xs font-mono font-bold">{fmt(grandBank)}</td>
-                                  <td colSpan={2} className="border border-border/60 px-3 py-2.5 text-xs font-mono font-bold">{fmt(grandTelephone)}</td>
-                                  <td className="border border-border/60 px-3 py-2.5 text-xs font-mono font-bold">{fmt(grandDepense)}</td>
+                                  <td colSpan={2} className="border border-border/60 px-3 py-2.5 text-xs  font-bold">{fmt(grandCash)}</td>
+                                  <td colSpan={3} className="border border-border/60 px-3 py-2.5 text-xs  font-bold">{fmt(grandBank)}</td>
+                                  <td colSpan={2} className="border border-border/60 px-3 py-2.5 text-xs  font-bold">{fmt(grandTelephone)}</td>
+                                  <td className="border border-border/60 px-3 py-2.5 text-xs  font-bold">{fmt(grandDepense)}</td>
                                 </tr>
                                 <tr className="bg-indigo-600 text-white">
                                   <td colSpan={10} className="border border-border/60 px-3 py-2.5 text-xs font-bold uppercase tracking-wide">
@@ -4998,21 +5312,120 @@ const [section, setSection] = useState <
                           </div>
                         </div>
 
-                        <div className="bg-gradient-to-br from-primary/[0.04] to-transparent border border-border rounded-[var(--radius-lg)] overflow-hidden shadow-sm">
-                          <div className="px-5 py-4 border-b border-border bg-primary/[0.06]">
-                            <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
-                              <Wallet size={15} className="text-primary" />
-                              Cash Reconciliation
-                            </h3>
-                            <p className="text-xs text-muted mt-0.5">{dateLabel[dateFilter]} · quick summary before versaiment</p>
-                          </div>
-                          <div className="divide-y divide-border/60">
-                            <div className="flex items-center justify-between px-5 py-4 bg-primary text-white">
-                              <span className="text-xs font-bold uppercase tracking-wide">Total</span>
-                              <span className="text-base font-mono font-bold">{fmt(grandTelephone)}</span>
+                        {(() => {
+                          const expensesTotal = managerReconciliationExpenses.reduce((s, e) => s + e.amount, 0);
+                          const remaining = grandTelephone - expensesTotal;
+                          return (
+                            <div className="bg-gradient-to-br from-primary/[0.04] to-transparent border border-border rounded-[var(--radius-lg)] overflow-hidden shadow-sm">
+                              <div className="px-5 py-4 border-b border-border bg-primary/[0.06]">
+                                <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
+                                  <Wallet size={15} className="text-primary" />
+                                  Total Amount(MOMO)
+                                </h3>
+                                <p className="text-xs text-muted mt-0.5">{dateLabel[dateFilter]} · quick summary before versaiment</p>
+                              </div>
+                              <div className="divide-y divide-border/60">
+                                <div className="flex items-center justify-between px-5 py-3 bg-primary/[0.06]">
+                                  <span className="text-xs font-bold text-primary uppercase tracking-wide">Total</span>
+                                  <span className="text-sm  text-primary">{fmt(grandTelephone)}</span>
+                                </div>
+
+                                {managerReconciliationExpenses.map((exp) =>
+                                  editingExpenseId === exp.id ? (
+                                    <div key={exp.id} className="flex items-center gap-2 px-5 py-2.5">
+                                      <input
+                                        type="text"
+                                        value={editExpenseName}
+                                        onChange={(e) => setEditExpenseName(e.target.value)}
+                                        className="flex-1 min-w-0 text-xs px-2.5 py-1.5 border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+                                      />
+                                      <input
+                                        type="number"
+                                        value={editExpenseAmount}
+                                        onChange={(e) => setEditExpenseAmount(e.target.value)}
+                                        className="w-28 text-xs px-2.5 py-1.5 border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary text-right"
+                                      />
+                                      <button
+                                        onClick={async () => {
+                                          await updateManagerReconciliationExpense(exp.id, {
+                                            name: editExpenseName.trim(),
+                                            amount: Number(editExpenseAmount) || 0,
+                                          });
+                                          setEditingExpenseId(null);
+                                        }}
+                                        className="text-xs font-semibold text-primary hover:underline flex-shrink-0"
+                                      >
+                                        Save
+                                      </button>
+                                      <button
+                                        onClick={() => setEditingExpenseId(null)}
+                                        className="text-xs text-muted hover:underline flex-shrink-0"
+                                      >
+                                        Cancel
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <div key={exp.id} className="flex items-center gap-2 px-5 py-2.5">
+                                      <span className="flex-1 min-w-0 text-xs text-foreground truncate">{exp.name || "Expense"}</span>
+                                      <span className="w-28 text-xs text-muted text-right">{fmt(exp.amount)}</span>
+                                      <button
+                                        onClick={() => {
+                                          setEditingExpenseId(exp.id);
+                                          setEditExpenseName(exp.name);
+                                          setEditExpenseAmount(String(exp.amount));
+                                        }}
+                                        title="Edit expense"
+                                        className="p-1.5 text-muted hover:text-primary hover:bg-primary/10 rounded transition-colors flex-shrink-0"
+                                      >
+                                        <FileText size={13} />
+                                      </button>
+                                      <button
+                                        onClick={() => deleteManagerReconciliationExpense(exp.id)}
+                                        title="Remove expense"
+                                        className="p-1.5 text-muted hover:text-danger hover:bg-danger/10 rounded transition-colors flex-shrink-0"
+                                      >
+                                        <Minus size={13} />
+                                      </button>
+                                    </div>
+                                  ),
+                                )}
+
+                                <div className="flex items-center gap-2 px-5 py-2.5">
+                                  <input
+                                    type="text"
+                                    value={newExpenseName}
+                                    onChange={(e) => setNewExpenseName(e.target.value)}
+                                    placeholder="Expense name"
+                                    className="flex-1 min-w-0 text-xs px-2.5 py-1.5 border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+                                  />
+                                  <input
+                                    type="number"
+                                    value={newExpenseAmount}
+                                    onChange={(e) => setNewExpenseAmount(e.target.value)}
+                                    placeholder="0"
+                                    className="w-28 text-xs px-2.5 py-1.5 border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary text-right"
+                                  />
+                                  <button
+                                    onClick={handleAddManagerExpense}
+                                    disabled={isSavingExpense}
+                                    className="text-xs font-semibold px-3 py-1.5 rounded-[var(--radius)] bg-primary text-white hover:bg-primary/90 transition-colors disabled:opacity-60 flex-shrink-0"
+                                  >
+                                    {isSavingExpense ? "Saving..." : "Add"}
+                                  </button>
+                                </div>
+
+                                {managerReconciliationError && (
+                                  <div className="px-5 py-2 text-xs text-danger">{managerReconciliationError}</div>
+                                )}
+
+                                <div className="flex items-center justify-between px-5 py-4 bg-primary text-white">
+                                  <span className="text-xs font-bold uppercase tracking-wide">Remaining</span>
+                                  <span className="text-base font-bold">{fmt(remaining)}</span>
+                                </div>
+                              </div>
                             </div>
-                          </div>
-                        </div>
+                          );
+                        })()}
                       </>
                     );
                   })()}

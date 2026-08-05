@@ -12,7 +12,7 @@ export function applyTheme(theme: Theme) {
 }
 
 export function getStoredTheme(): Theme {
-  return (localStorage.getItem(STORAGE_KEY) as Theme) || "system";
+  return (localStorage.getItem(STORAGE_KEY) as Theme) || "light";
 }
 
 export function setStoredTheme(theme: Theme) {

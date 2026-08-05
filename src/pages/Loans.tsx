@@ -108,11 +108,11 @@ export default function Loans({ setPage }: Props) {
   const clientSummaries = selectedAgentId
     ? activeClients
         .map((client) => {
-          const reports = loanReports.filter(
-            (r) => r.agentId === selectedAgentId && r.clientId === client.id,
-          );
-          const total = reports.reduce((s, r) => s + getRemaining(r), 0);
-          return { client, total, reportCount: reports.length };
+          const unpaidReports = loanReports
+            .filter((r) => r.agentId === selectedAgentId && r.clientId === client.id)
+            .filter((r) => getRemaining(r) > 0);
+          const total = unpaidReports.reduce((s, r) => s + getRemaining(r), 0);
+          return { client, total, reportCount: unpaidReports.length };
         })
         .filter((s) => s.total > 0)
         .sort((a, b) => b.total - a.total)
