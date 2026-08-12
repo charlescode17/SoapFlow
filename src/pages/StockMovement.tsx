@@ -4,6 +4,7 @@ import {
   ArrowUpCircle,
   Plus,
   Trash2,
+  Pencil,
   List,
   LayoutGrid,
   Printer,
@@ -20,6 +21,7 @@ import Swal from "sweetalert2";
 // ============================================================================
 // const COMPANY_NAME = "";
 
+type Movement = ReturnType<typeof useStore>["state"]["stockMovements"][number];
 function lastBalance(
   movements: ReturnType<typeof useStore>["state"]["stockMovements"],
   productId: string,
@@ -59,6 +61,18 @@ export default function StockMovement() {
   const [showForm, setShowForm] = useState(false);
   const [view, setView] = useState<"list" | "grid">("list");
   const [saving, setSaving] = useState(false);
+  const [editingMovement, setEditingMovement] = useState<Movement | null>(null);
+  const [editForm, setEditForm] = useState({
+    date: "",
+    type: "marketing_agent" as StockType,
+    agentId: "",
+    location: "",
+    isReturn: false,
+    unit: "box" as "box" | "piece",
+    qty: "",
+  });
+  const [editSaving, setEditSaving] = useState(false);
+  const canEditExisting = userRole === "manager";
 
   // Common Header Form Fields
   const [commonForm, setCommonForm] = useState({
@@ -134,9 +148,12 @@ export default function StockMovement() {
   };
 
   const filteredMovements = state.stockMovements
-    .filter((m) => productFilter === "all" || m.productId === productFilter)
-    .slice()
-    .sort((a, b) => (a.date < b.date ? 1 : -1));
+  .map((m, idx) => ({ ...m, __idx: idx }))
+  .filter((m) => productFilter === "all" || m.productId === productFilter)
+  .sort((a, b) => {
+    if (a.date !== b.date) return a.date < b.date ? 1 : -1;
+    return b.__idx - a.__idx;
+  });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -380,7 +397,138 @@ export default function StockMovement() {
       setSaving(false);
     }
   };
+  const openEditModal = (m: Movement) => {
+    setEditingMovement(m);
+    setEditForm({
+      date: m.date,
+      type: m.type,
+      agentId: m.agentId ?? "",
+      location: m.location ?? "",
+      isReturn: m.isReturn,
+      unit: m.unit,
+      qty: String(m.enteredQty),
+    });
+  };
 
+  const closeEditModal = () => setEditingMovement(null);
+
+  const handleUpdateMovement = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingMovement) return;
+
+    const qty = parseFloat(editForm.qty);
+    if (isNaN(qty) || qty <= 0) {
+      Swal.fire({ icon: "warning", title: "Invalid Quantity", text: "Enter a quantity greater than 0." });
+      return;
+    }
+
+    setEditSaving(true);
+    try {
+      const prod = products.find((p) => p.id === editingMovement.productId);
+      const piecesPerBox = prod?.piecesPerBox ?? prod?.qtyPerBox ?? null;
+      const isStockIn = editForm.type === "production" || editForm.isReturn;
+
+      let boxesQty = qty;
+      let baseQty = qty;
+      if (editForm.unit === "piece") {
+        baseQty = qty;
+        boxesQty = piecesPerBox && piecesPerBox > 0 ? parseFloat((qty / piecesPerBox).toFixed(3)) : qty;
+      } else {
+        boxesQty = qty;
+        baseQty = piecesPerBox ? qty * piecesPerBox : qty;
+      }
+
+      const lineUnitPrice =
+        editForm.type === "marketing_agent"
+          ? editForm.unit === "box"
+            ? prod?.boxPrice ?? prod?.pricePerBox ?? 0
+            : prod?.unitPrice ?? 0
+          : null;
+      const lineTotalPrice = lineUnitPrice != null ? parseFloat((qty * lineUnitPrice).toFixed(2)) : null;
+
+      // Same-product movements in true chronological (insertion) order
+      const productChain = state.stockMovements.filter((m) => m.productId === editingMovement.productId);
+      const editIndex = productChain.findIndex((m) => m.id === editingMovement.id);
+      const prevBalance = editIndex > 0 ? productChain[editIndex - 1].balance : 0;
+
+      const stockIn = isStockIn ? boxesQty : 0;
+      const stockOut = isStockIn ? 0 : boxesQty;
+      const newBalance = parseFloat((prevBalance + stockIn - stockOut).toFixed(3));
+
+      // Recalculate balance for every later movement of this product, since editing
+      // an old entry shifts the running balance for everything after it
+      const laterUpdates: { id: string; balance: number }[] = [];
+      let runningBalance = newBalance;
+      for (let i = editIndex + 1; i < productChain.length; i++) {
+        const m = productChain[i];
+        runningBalance = parseFloat((runningBalance + m.stockIn - m.stockOut).toFixed(3));
+        laterUpdates.push({ id: m.id, balance: runningBalance });
+      }
+
+      const { error: mainError } = await supabase
+        .from("stock_movements")
+        .update({
+          date: editForm.date,
+          type: editForm.type,
+          agent_id: editForm.type === "marketing_agent" && editForm.agentId ? editForm.agentId : null,
+          location: editForm.type === "marketing_agent" ? editForm.location || null : null,
+          is_return: editForm.isReturn,
+          unit: editForm.unit,
+          entered_qty: qty,
+          base_qty: baseQty,
+          stock_in: stockIn,
+          stock_out: stockOut,
+          balance: newBalance,
+          unit_price: lineUnitPrice,
+          total_price: lineTotalPrice,
+        })
+        .eq("id", editingMovement.id);
+      if (mainError) throw mainError;
+
+      for (const u of laterUpdates) {
+        const { error } = await supabase.from("stock_movements").update({ balance: u.balance }).eq("id", u.id);
+        if (error) throw error;
+      }
+
+      dispatch({
+        type: "UPDATE_STOCK_MOVEMENTS",
+        payload: [
+          {
+            ...editingMovement,
+            date: editForm.date,
+            type: editForm.type,
+            agentId: editForm.type === "marketing_agent" ? editForm.agentId : undefined,
+            location: editForm.type === "marketing_agent" ? editForm.location : undefined,
+            isReturn: editForm.isReturn,
+            unit: editForm.unit,
+            enteredQty: qty,
+            baseQty,
+            stockIn,
+            stockOut,
+            balance: newBalance,
+            unitPrice: lineUnitPrice ?? undefined,
+            totalPrice: lineTotalPrice ?? undefined,
+          },
+          ...laterUpdates.map((u) => ({ ...productChain.find((m) => m.id === u.id)!, balance: u.balance })),
+        ],
+      });
+
+      await supabase.from("activity_logs").insert({
+        actor_id: state.user?.id,
+        actor_name: state.user?.name ?? "unknown",
+        action: "edited",
+        entity_type: "stock_movement",
+        entity_name: `${getProductName(editingMovement.productId)} — ${movementLabel(editForm.type)}${editForm.isReturn ? " (Return)" : ""} (qty ${editingMovement.enteredQty} → ${qty})`,
+      });
+
+      Swal.fire({ icon: "success", title: "Movement Updated", timer: 1500, showConfirmButton: false });
+      closeEditModal();
+    } catch (err: any) {
+      Swal.fire({ icon: "error", title: "Update Failed", text: err.message || "Failed to update stock movement." });
+    } finally {
+      setEditSaving(false);
+    }
+  };
   // Export CSV Excel
   const handleExportCSV = () => {
     const csvHeaders = [
@@ -921,6 +1069,11 @@ export default function StockMovement() {
                   <th className="text-right text-xs text-muted uppercase tracking-wider px-4 py-3">
                     Balance
                   </th>
+                  {canEditExisting && (
+                    <th className="text-right text-xs text-muted uppercase tracking-wider px-4 py-3">
+                      Actions
+                    </th>
+                  )}
                 </tr>
               </thead>
               <tbody>
@@ -989,6 +1142,20 @@ export default function StockMovement() {
                     <td className="px-4 py-3 text-xs text-right text-foreground whitespace-nowrap">
                       {m.balance.toLocaleString()} boxes
                     </td>
+
+                    {/* 9. Actions */}
+                    {canEditExisting && (
+                      <td className="px-4 py-3 text-right whitespace-nowrap">
+                        <button
+                          type="button"
+                          onClick={() => openEditModal(m)}
+                          className="p-1.5 text-muted hover:text-primary hover:bg-primary/10 rounded-[var(--radius-sm)] transition-colors"
+                          title="Edit movement"
+                        >
+                          <Pencil size={14} />
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -1012,13 +1179,131 @@ export default function StockMovement() {
                     boxes
                   </td>
                   <td className="px-4 py-3 text-right text-foreground">
-                    {filteredMovements.length > 0
-                      ? `${filteredMovements[0].balance.toLocaleString()} boxes`
-                      : "—"}
+                    {productFilter === "all"
+                      ? `${products
+                          .reduce((sum, p) => sum + lastBalance(state.stockMovements, p.id), 0)
+                          .toLocaleString()} boxes`
+                      : `${lastBalance(state.stockMovements, productFilter).toLocaleString()} boxes`}
                   </td>
+                  {canEditExisting && <td className="px-4 py-3" />}
                 </tr>
               </tfoot>
             </table>
+          </div>
+        </div>
+      )}
+    {editingMovement && canEditExisting && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4 no-print">
+          <div className="bg-card border border-border rounded-[var(--radius-lg)] p-6 w-full max-w-lg shadow-lg">
+            <h3 className="text-base text-foreground mb-4">
+              Edit Movement — {getProductName(editingMovement.productId)}
+            </h3>
+            <form onSubmit={handleUpdateMovement} className="space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-muted uppercase tracking-wide block mb-1.5">Date</label>
+                  <input
+                    type="date"
+                    value={editForm.date}
+                    onChange={(e) => setEditForm((f) => ({ ...f, date: e.target.value }))}
+                    required
+                    className="w-full px-3 py-2 text-sm border border-border rounded-[var(--radius)] bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-muted uppercase tracking-wide block mb-1.5">Type</label>
+                  <select
+                    value={editForm.type}
+                    onChange={(e) => setEditForm((f) => ({ ...f, type: e.target.value as StockType }))}
+                    className="w-full px-3 py-2 text-sm border border-border rounded-[var(--radius)] bg-white"
+                  >
+                    {MOVEMENT_TYPES.map((t) => (
+                      <option key={t.value} value={t.value}>{t.label}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {editForm.type === "marketing_agent" && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs text-muted uppercase tracking-wide block mb-1.5">Agent</label>
+                    <select
+                      value={editForm.agentId}
+                      onChange={(e) => setEditForm((f) => ({ ...f, agentId: e.target.value }))}
+                      className="w-full px-3 py-2 text-sm border border-border rounded-[var(--radius)] bg-white"
+                    >
+                      <option value="">Select agent</option>
+                      {agents.map((a) => (
+                        <option key={a.id} value={a.id}>{a.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted uppercase tracking-wide block mb-1.5">Location</label>
+                    <input
+                      value={editForm.location}
+                      onChange={(e) => setEditForm((f) => ({ ...f, location: e.target.value }))}
+                      className="w-full px-3 py-2 text-sm border border-border rounded-[var(--radius)] bg-white"
+                    />
+                  </div>
+                  <label className="col-span-2 flex items-center gap-2 cursor-pointer bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-[var(--radius)] w-fit">
+                    <input
+                      type="checkbox"
+                      checked={editForm.isReturn}
+                      onChange={(e) => setEditForm((f) => ({ ...f, isReturn: e.target.checked }))}
+                      className="w-4 h-4 accent-primary"
+                    />
+                    <span className="text-xs text-emerald-800">Agent Return</span>
+                  </label>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex items-center gap-1 bg-background p-1 border border-border rounded-[var(--radius)]">
+                  <button
+                    type="button"
+                    onClick={() => setEditForm((f) => ({ ...f, unit: "box" }))}
+                    className={`flex-1 py-1.5 text-xs rounded-[var(--radius-sm)] ${editForm.unit === "box" ? "bg-primary text-white" : "text-muted"}`}
+                  >
+                    Boxes
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditForm((f) => ({ ...f, unit: "piece" }))}
+                    className={`flex-1 py-1.5 text-xs rounded-[var(--radius-sm)] ${editForm.unit === "piece" ? "bg-primary text-white" : "text-muted"}`}
+                  >
+                    Pcs
+                  </button>
+                </div>
+                <input
+                  type="number"
+                  step="any"
+                  min="0.01"
+                  value={editForm.qty}
+                  onChange={(e) => setEditForm((f) => ({ ...f, qty: e.target.value }))}
+                  placeholder="Quantity"
+                  className="w-full px-3 py-2 text-sm border border-border rounded-[var(--radius)]"
+                />
+              </div>
+
+              <div className="flex justify-end gap-3 pt-3 border-t border-border">
+                <button
+                  type="button"
+                  onClick={closeEditModal}
+                  className="px-4 py-2 text-xs border border-border rounded-[var(--radius)] hover:bg-accent/40"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={editSaving}
+                  className="px-6 py-2 text-xs bg-primary text-white rounded-[var(--radius)] hover:bg-primary/90 disabled:opacity-50"
+                >
+                  {editSaving ? "Saving..." : "Save Changes"}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

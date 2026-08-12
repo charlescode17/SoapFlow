@@ -91,7 +91,7 @@ export default function Loans({ setPage }: Props) {
       const byClient = new Map<string, number>();
       reports.forEach((r) => {
         const remaining = getRemaining(r);
-        if (remaining <= 0) return;
+        if (remaining <= 0 || !r.clientId) return;
         byClient.set(r.clientId, (byClient.get(r.clientId) ?? 0) + remaining);
       });
       return { agent, total: getAgentStockDebt(agent.id), clientCount: byClient.size };
@@ -393,7 +393,7 @@ export default function Loans({ setPage }: Props) {
             <div className="bg-card border border-border rounded-[var(--radius-lg)] p-5 mb-4 text-sm text-foreground">
               <span className="font-mono">{fmt(getAgentStockLoan(selectedAgentId))}</span> dispatched −{" "}
               <span className="font-mono">{fmt(getAgentDistributedValue(selectedAgentId))}</span> distributed ={" "}
-              <span className="font-mono font-semibold text-success">{fmt(getAgentRemainingStock(selectedAgentId))}</span> still physically with this agent.
+              <span className="font-mono font-semibold text-success">{fmt(getAgentRemainingStock(selectedAgentId))}</span> remaining  
               <p className="text-xs text-muted mt-2">This should match what the agent is currently carrying — if it doesn't, follow up with them directly.</p>
             </div>
           )}
@@ -403,9 +403,27 @@ export default function Loans({ setPage }: Props) {
       {/* ============ LEVEL 2: CLIENTS FOR AGENT ============ */}
       {view === "clients" && (
         filteredClientSummaries.length === 0 ? (
-          <div className="bg-card border border-border rounded-[var(--radius-lg)] flex flex-col items-center py-16">
-            <UserIcon size={32} className="text-muted/40 mb-3" />
-            <p className="text-sm text-muted">No outstanding loans for this agent</p>
+          <div className="bg-card border border-border rounded-[var(--radius-lg)] flex flex-col items-center py-16 text-center px-6">
+            {getAgentRemainingStock(selectedAgentId!) > 0 ? (
+              <>
+                <CreditCard size={32} className="text-secondary/40 mb-3" />
+                <p className="text-sm text-foreground font-medium">
+                  No client loans yet
+                </p>
+                <p className="text-xs text-muted mt-1 max-w-xs">
+                  This agent is holding{" "}
+                  <span className="font-mono text-secondary font-semibold">
+                    {fmt(getAgentRemainingStock(selectedAgentId!))}
+                  </span>{" "}
+                  worth of stock not yet distributed to any client.
+                </p>
+              </>
+            ) : (
+              <>
+                <UserIcon size={32} className="text-muted/40 mb-3" />
+                <p className="text-sm text-muted">No outstanding loans for this agent</p>
+              </>
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">

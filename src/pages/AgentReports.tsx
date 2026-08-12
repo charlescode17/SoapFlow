@@ -25,8 +25,17 @@ type SaleLine = {
   lineId: string;
   reportId?: string; // present when this line already exists in the DB (edit mode)
   productId: string;
+  unit: "box" | "piece";
   qty: string;
+  unitPrice: string; // editable — defaults from the product, but can change per sale
 };
+
+function toBaseQty(qty: number, unit: "box" | "piece", piecesPerBox: number | null): number {
+  if (unit === "piece") {
+    return piecesPerBox && piecesPerBox > 0 ? qty / piecesPerBox : qty;
+  }
+  return qty;
+}
 
 function inRange(date: string, filter: DateFilter): boolean {
   if (filter === "all") return true;
@@ -131,8 +140,10 @@ export default function AgentReports() {
     marketingAgents.find((a) => a.id === id)?.name ?? "—";
   const getProductName = (id: string) => products.find((p) => p.id === id)?.name ?? "—";
 
-  const getBuyerLabel = (r: AgentReport) =>
+ const getBuyerLabel = (r: AgentReport) =>
     r.clientId ? getName(r.clientId, clients) : r.customerName?.trim() || "Walk-in customer";
+  const qtyLabel = (r: AgentReport) =>
+    `${r.qty} ${r.unit === "piece" ? (r.qty === 1 ? "pc" : "pcs") : r.qty === 1 ? "box" : "boxes"}`;
 
   const filtered = reports.filter((r) => {
     const agent = marketingAgents.find((a) => a.id === r.agentId);
@@ -150,7 +161,7 @@ export default function AgentReports() {
   });
 
   const groups = groupReports(filtered);
-  const totalQty = filtered.reduce((s, r) => s + r.qty, 0);
+  const totalQty = filtered.reduce((s, r) => s + (r.baseQty ?? r.qty), 0);
   const totalAmt = filtered.reduce((s, r) => s + r.totalPrice, 0);
 
   // ---------- stock availability ----------
@@ -167,26 +178,45 @@ export default function AgentReports() {
       .reduce((s, m) => s + m.stockIn, 0);
     const distributed = state.agentReports
       .filter((r) => !r.deleted && r.agentId === agentId && r.productId === productId && !excludeReportIds.includes(r.id))
-      .reduce((s, r) => s + r.qty, 0);
+      .reduce((s, r) => s + (r.baseQty ?? r.qty), 0);
     return dispatched - returned - distributed;
   };
 
   // Availability for one line in the form, accounting for other lines in
-  // the same sale that already claim boxes of the same product.
-  const getLineAvailable = (line: SaleLine) => {
+  // the same sale that already claim stock of the same product — converting
+  // every line to boxes-equivalent first, since lines can mix box and piece.
+  const getLineAvailableBoxes = (line: SaleLine) => {
     if (!form.agentId || !line.productId) return 0;
     const base = getAgentProductAvailable(form.agentId, line.productId, editingLineIds);
     const claimedByOtherLines = lines
       .filter((l) => l.lineId !== line.lineId && l.productId === line.productId)
-      .reduce((s, l) => s + (parseFloat(l.qty) || 0), 0);
+      .reduce((s, l) => {
+        const p = products.find((pp) => pp.id === l.productId);
+        const piecesPerBox = p?.piecesPerBox ?? p?.qtyPerBox ?? null;
+        return s + toBaseQty(parseFloat(l.qty) || 0, l.unit, piecesPerBox);
+      }, 0);
     return base - claimedByOtherLines;
+  };
+
+  // Same availability, converted into the unit the line is currently using,
+  // so "X pieces available" reads correctly for a piece-mode line.
+  const getLineAvailableDisplay = (line: SaleLine) => {
+    const availableBoxes = getLineAvailableBoxes(line);
+    if (line.unit === "piece") {
+      const p = products.find((pp) => pp.id === line.productId);
+      const piecesPerBox = p?.piecesPerBox ?? p?.qtyPerBox ?? null;
+      return piecesPerBox && piecesPerBox > 0 ? Math.floor(availableBoxes * piecesPerBox) : availableBoxes;
+    }
+    return availableBoxes;
   };
 
   const lineDetails = lines.map((l) => {
     const product = products.find((p) => p.id === l.productId);
-    const unitPrice = product?.pricePerBox ?? 0;
+    const piecesPerBox = product?.piecesPerBox ?? product?.qtyPerBox ?? null;
     const qty = parseFloat(l.qty || "0") || 0;
-    return { ...l, product, unitPrice, qtyNum: qty, total: qty * unitPrice };
+    const unitPriceNum = parseFloat(l.unitPrice || "0") || 0;
+    const baseQty = toBaseQty(qty, l.unit, piecesPerBox);
+    return { ...l, product, piecesPerBox, unitPriceNum, qtyNum: qty, baseQtyNum: baseQty, total: qty * unitPriceNum };
   });
   const grandTotal = lineDetails.reduce((s, l) => s + l.total, 0);
   const grandQty = lineDetails.reduce((s, l) => s + l.qtyNum, 0);
@@ -201,7 +231,13 @@ export default function AgentReports() {
       clientId: clients[0]?.id || "",
       customerName: "",
     });
-    setLines([{ lineId: crypto.randomUUID(), productId: defaultProduct?.id ?? "", qty: "" }]);
+    setLines([{
+      lineId: crypto.randomUUID(),
+      productId: defaultProduct?.id ?? "",
+      unit: "box",
+      qty: "",
+      unitPrice: defaultProduct?.pricePerBox != null ? String(defaultProduct.pricePerBox) : "",
+    }]);
     setModal("add");
   };
 
@@ -220,7 +256,9 @@ export default function AgentReports() {
         lineId: crypto.randomUUID(),
         reportId: l.id,
         productId: l.productId,
+        unit: l.unit ?? "box",
         qty: l.qty.toString(),
+        unitPrice: l.unitPrice.toString(),
       })),
     );
     setModal("edit");
@@ -236,33 +274,45 @@ export default function AgentReports() {
   const addLine = () => {
     const usedIds = lines.map((l) => l.productId);
     const nextProduct = products.find((p) => !usedIds.includes(p.id)) ?? products[0];
-    setLines((ls) => [...ls, { lineId: crypto.randomUUID(), productId: nextProduct?.id ?? "", qty: "" }]);
+    setLines((ls) => [
+      ...ls,
+      {
+        lineId: crypto.randomUUID(),
+        productId: nextProduct?.id ?? "",
+        unit: "box",
+        qty: "",
+        unitPrice: nextProduct?.pricePerBox != null ? String(nextProduct.pricePerBox) : "",
+      },
+    ]);
   };
   const removeLine = (lineId: string) => setLines((ls) => ls.filter((l) => l.lineId !== lineId));
   const updateLine = (lineId: string, patch: Partial<SaleLine>) =>
     setLines((ls) => ls.map((l) => (l.lineId === lineId ? { ...l, ...patch } : l)));
 
   // ---------- save ----------
-  const handleSave = async () => {
-    if (!state.user || !form.agentId) return;
+ const handleSave = async () => {
+    const currentUser = state.user;
+    if (!currentUser || !form.agentId) return;
     if (saleType === "client" && !form.clientId) return;
     if (lines.length === 0 || lines.some((l) => !l.productId || !l.qty || parseFloat(l.qty) <= 0)) {
       Swal.fire({ icon: "warning", title: "Add at least one product", text: "Every product line needs a product and a quantity.", confirmButtonColor: "#2E9E8F" });
       return;
     }
 
-    // Aggregate requested qty per product across all lines, then check stock once per product.
+    // Aggregate requested qty per product across all lines, in boxes-equivalent
+    // (so mixing box and piece lines of the same product compares correctly),
+    // then check stock once per product.
     const requestedByProduct = new Map<string, number>();
     for (const l of lineDetails) {
-      requestedByProduct.set(l.productId, (requestedByProduct.get(l.productId) ?? 0) + l.qtyNum);
+      requestedByProduct.set(l.productId, (requestedByProduct.get(l.productId) ?? 0) + l.baseQtyNum);
     }
-    for (const [productId, qty] of requestedByProduct) {
+    for (const [productId, baseQty] of requestedByProduct) {
       const available = getAgentProductAvailable(form.agentId, productId, editingLineIds);
-      if (qty > available) {
+      if (baseQty > available) {
         Swal.fire({
           icon: "warning",
           title: "Not enough stock on hand",
-          text: `Dear agent you only have ${available} box${available === 1 ? "" : "es"} of ${getProductName(productId)}. You entered ${qty}.`,
+          text: `Dear agent you only have ${available} box${available === 1 ? "" : "es"} of ${getProductName(productId)} left (boxes-equivalent). What you entered comes to ${baseQty.toFixed(2)} boxes.`,
           confirmButtonColor: "#2E9E8F",
         });
         return;
@@ -279,11 +329,13 @@ export default function AgentReports() {
       customer_name: saleType === "walkin" ? form.customerName.trim() || null : null,
       product_id: l.productId,
       date: form.date,
+      unit: l.unit,
       qty: l.qtyNum,
-      unit_price: l.unitPrice,
+      base_qty: l.baseQtyNum,
+      unit_price: l.unitPriceNum,
       total_price: l.total,
       payment_status: paymentStatus,
-      created_by: state.user.name,
+      created_by: currentUser.name,
     });
 
     const toAgentReport = (d: any): AgentReport => ({
@@ -293,7 +345,9 @@ export default function AgentReports() {
       customerName: d.customer_name ?? undefined,
       productId: d.product_id,
       date: d.date,
+      unit: (d.unit ?? "box") as "box" | "piece",
       qty: Number(d.qty),
+      baseQty: d.base_qty != null ? Number(d.base_qty) : Number(d.qty),
       unitPrice: Number(d.unit_price),
       totalPrice: Number(d.total_price),
       paymentStatus: d.payment_status,
@@ -317,8 +371,8 @@ export default function AgentReports() {
       newReports.forEach((nr) => dispatch({ type: "ADD_AGENT_REPORT", payload: nr }));
 
       await supabase.from("activity_logs").insert({
-        actor_id: state.user.id,
-        actor_name: state.user.name,
+        actor_id: currentUser.id,
+        actor_name: currentUser.name,
         action: "created",
         entity_type: "agent_report",
         entity_id: saleGroupId,
@@ -336,7 +390,7 @@ export default function AgentReports() {
             amount: grandTotal,
             mode: walkinMode,
             receiver_name: walkinMode === "telephone" ? walkinReceiver || null : null,
-            created_by: state.user.name,
+            created_by: currentUser.name,
           })
           .select()
           .single();
@@ -379,8 +433,10 @@ export default function AgentReports() {
             customerName: saleType === "walkin" ? form.customerName.trim() || undefined : undefined,
             productId: l.productId,
             date: form.date,
+            unit: l.unit,
             qty: l.qtyNum,
-            unitPrice: l.unitPrice,
+            baseQty: l.baseQtyNum,
+            unitPrice: l.unitPriceNum,
             totalPrice: l.total,
             paymentStatus,
           },
@@ -407,8 +463,8 @@ export default function AgentReports() {
       }
 
       await supabase.from("activity_logs").insert({
-        actor_id: state.user.id,
-        actor_name: state.user.name,
+        actor_id: currentUser.id,
+        actor_name: currentUser.name,
         action: "updated",
         entity_type: "agent_report",
         entity_id: editingGroupKey,
@@ -580,7 +636,7 @@ export default function AgentReports() {
           {groups.map(({ key, lines: groupLines }) => {
             const first = groupLines[0];
             const client = clients.find((c) => c.id === first.clientId);
-            const qtySum = groupLines.reduce((s, r) => s + r.qty, 0);
+            const qtySum = groupLines.reduce((s, r) => s + (r.baseQty ?? r.qty), 0);
             const totalSum = groupLines.reduce((s, r) => s + r.totalPrice, 0);
             return (
               <div
@@ -620,7 +676,7 @@ export default function AgentReports() {
                   {groupLines.map((l) => (
                     <div key={l.id} className="flex items-center justify-between text-xs">
                       <span className="text-foreground truncate">
-                        {getProductName(l.productId)} <span className="text-muted">× {l.qty}</span>
+                        {getProductName(l.productId)} <span className="text-muted">× {qtyLabel(l)}</span>
                       </span>
                       <span className="font-mono text-muted flex-shrink-0 ml-2">{fmt(l.totalPrice)}</span>
                     </div>
@@ -703,7 +759,7 @@ export default function AgentReports() {
                 {groups.map(({ key, lines: groupLines }, i) => {
                   const first = groupLines[0];
                   const client = clients.find((c) => c.id === first.clientId);
-                  const qtySum = groupLines.reduce((s, r) => s + r.qty, 0);
+                  const qtySum = groupLines.reduce((s, r) => s + (r.baseQty ?? r.qty), 0);
                   const totalSum = groupLines.reduce((s, r) => s + r.totalPrice, 0);
                   return (
                     <tr
@@ -735,7 +791,7 @@ export default function AgentReports() {
                         <div className="flex flex-col gap-0.5">
                           {groupLines.map((l) => (
                             <span key={l.id} className="whitespace-nowrap">
-                              {getProductName(l.productId)} <span className="text-muted">× {l.qty}</span>
+                              {getProductName(l.productId)} <span className="text-muted">× {qtyLabel(l)}</span>
                             </span>
                           ))}
                         </div>
@@ -789,7 +845,7 @@ export default function AgentReports() {
             {groups.map(({ key, lines: groupLines }) => {
               const first = groupLines[0];
               const client = clients.find((c) => c.id === first.clientId);
-              const qtySum = groupLines.reduce((s, r) => s + r.qty, 0);
+              const qtySum = groupLines.reduce((s, r) => s + (r.baseQty ?? r.qty), 0);
               const totalSum = groupLines.reduce((s, r) => s + r.totalPrice, 0);
               return (
                 <div key={key} className="px-4 py-3.5">
@@ -824,7 +880,7 @@ export default function AgentReports() {
                     {groupLines.map((l) => (
                       <div key={l.id} className="flex items-center justify-between text-xs">
                         <span className="text-foreground">
-                          {getProductName(l.productId)} <span className="text-muted">× {l.qty}</span>
+                          {getProductName(l.productId)} <span className="text-muted">×{qtyLabel(l)}</span>
                         </span>
                         <span className="font-mono text-muted">{fmt(l.totalPrice)}</span>
                       </div>
@@ -981,23 +1037,45 @@ export default function AgentReports() {
 
               <div className="space-y-2">
                 {lineDetails.map((l) => {
-                  const available = getLineAvailable(l);
+                  const available = getLineAvailableDisplay(l);
                   return (
                     <div
                       key={l.lineId}
                       className="border border-border rounded-[var(--radius)] p-3 bg-background/40"
                     >
-                      <div className="grid grid-cols-[1fr_auto_auto] sm:grid-cols-[1fr_110px_110px_auto] gap-2 items-start">
+                      <div className="grid grid-cols-2 sm:grid-cols-[1fr_90px_90px_100px_auto] gap-2 items-start">
                         <select
                           value={l.productId}
-                          onChange={(e) => updateLine(l.lineId, { productId: e.target.value })}
-                          className="w-full px-3 py-2 text-sm border border-border rounded-[var(--radius)] bg-white focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary col-span-3 sm:col-span-1"
+                          onChange={(e) => {
+                            const newProduct = products.find((p) => p.id === e.target.value);
+                            updateLine(l.lineId, {
+                              productId: e.target.value,
+                              unit: "box",
+                              unitPrice: newProduct?.pricePerBox != null ? String(newProduct.pricePerBox) : "",
+                            });
+                          }}
+                          className="w-full px-3 py-2 text-sm border border-border rounded-[var(--radius)] bg-white focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary col-span-2 sm:col-span-1"
                         >
                           {products.map((p) => (
                             <option key={p.id} value={p.id}>
                               {p.name}
                             </option>
                           ))}
+                        </select>
+                        <select
+                          value={l.unit}
+                          onChange={(e) => {
+                            const newUnit = e.target.value as "box" | "piece";
+                            const priceDefault = newUnit === "piece" ? l.product?.unitPrice : l.product?.pricePerBox;
+                            updateLine(l.lineId, {
+                              unit: newUnit,
+                              unitPrice: priceDefault != null ? String(priceDefault) : l.unitPrice,
+                            });
+                          }}
+                          className="w-full px-2 py-2 text-sm border border-border rounded-[var(--radius)] bg-white focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+                        >
+                          <option value="box">Boxes</option>
+                          <option value="piece">Pieces</option>
                         </select>
                         <input
                           type="number"
@@ -1007,9 +1085,16 @@ export default function AgentReports() {
                           placeholder="Qty"
                           className="w-full px-3 py-2 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
                         />
-                        <div className="px-3 py-2 text-sm border border-border/50 rounded-[var(--radius)] bg-background font-mono text-muted whitespace-nowrap">
-                          {fmt(l.total)}
-                        </div>
+                        <input
+                          type="number"
+                          min="0"
+                          step="any"
+                          value={l.unitPrice}
+                          onChange={(e) => updateLine(l.lineId, { unitPrice: e.target.value })}
+                          placeholder="Price"
+                          title="Price per unit — editable for today's rate"
+                          className="w-full px-3 py-2 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+                        />
                         {lines.length > 1 && (
                           <button
                             type="button"
@@ -1022,7 +1107,7 @@ export default function AgentReports() {
                       </div>
                       {form.agentId && l.productId && (
                         <p className={`text-[11px] mt-1.5 ${available <= 0 ? "text-danger" : "text-muted"}`}>
-                          {available} box{available === 1 ? "" : "es"} available · unit price {fmt(l.unitPrice)}
+                          {available} {l.unit === "piece" ? `piece${available === 1 ? "" : "s"}` : `box${available === 1 ? "" : "es"}`} available · total {fmt(l.total)}
                         </p>
                       )}
                     </div>

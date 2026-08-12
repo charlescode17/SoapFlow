@@ -92,17 +92,20 @@ export interface AgentReport {
   customerName?: string;
   productId: string;
   date: string;
-  qty: number;
-  unitPrice: number;
+  unit: "box" | "piece";
+  qty: number;       // entered quantity, in `unit`
+  baseQty: number;    // boxes-equivalent, for stock accounting
+  unitPrice: number;  // price per `unit`, editable per sale
   totalPrice: number;
   paymentStatus: PaymentStatus;
   createdBy: string;
+  saleGroupId?: string;
   deleted: boolean;
 }
 
 export interface Payment {
   id: string;
-  clientId: string;
+  clientId?: string;
   agentId?: string;
   reportId?: string;
   date: string;

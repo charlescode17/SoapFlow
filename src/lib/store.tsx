@@ -32,6 +32,7 @@ type Action =
   | { type: "UPDATE_CLIENT"; payload: Client }
   | { type: "DELETE_CLIENT"; id: string }
   | { type: "ADD_STOCK_MOVEMENT"; payload: StockMovement }
+  | { type: "UPDATE_STOCK_MOVEMENTS"; payload: StockMovement[] }
   | { type: "ADD_AGENT_REPORT"; payload: AgentReport }
   | { type: "UPDATE_AGENT_REPORT"; payload: AgentReport }
   | { type: "DELETE_AGENT_REPORT"; id: string }
@@ -113,6 +114,15 @@ function reducer(state: AppState, action: Action): AppState {
         ...state,
         stockMovements: [...state.stockMovements, action.payload],
       };
+    case "UPDATE_STOCK_MOVEMENTS": {
+      const updatedById = new Map(action.payload.map((m) => [m.id, m]));
+      return {
+        ...state,
+        stockMovements: state.stockMovements.map((m) =>
+          updatedById.has(m.id) ? { ...m, ...updatedById.get(m.id)! } : m,
+        ),
+      };
+    }
     case "ADD_AGENT_REPORT":
       return {
         ...state,
@@ -356,13 +366,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             id: r.id,
             agentId: r.agent_id,
             clientId: r.client_id,
+            customerName: r.customer_name ?? undefined,
             productId: r.product_id,
             date: r.date,
+            unit: (r.unit ?? "box") as "box" | "piece",
             qty: Number(r.qty),
+            baseQty: r.base_qty != null ? Number(r.base_qty) : Number(r.qty),
             unitPrice: Number(r.unit_price),
             totalPrice: Number(r.total_price),
             paymentStatus: r.payment_status,
             createdBy: r.created_by,
+            saleGroupId: r.sale_group_id ?? undefined,
             deleted: Boolean(r.deleted),
           })),
         });
