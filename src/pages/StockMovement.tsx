@@ -56,6 +56,7 @@ interface ProductItemRow {
   productId: string;
   unit: "box" | "piece";
   qty: string;
+  unitPrice: string;
 }
 
 export default function StockMovement() {
@@ -64,6 +65,14 @@ export default function StockMovement() {
   const canEdit = userRole === "manager" || userRole === "stock_agent";
   const products = state.products.filter((p) => !p.deleted);
   const agents = state.agents.filter((a) => !a.deleted);
+
+  const defaultPriceFor = (productId: string, unit: "box" | "piece") => {
+    const prod = products.find((p) => p.id === productId);
+    if (!prod) return "";
+    const price =
+      unit === "box" ? prod.boxPrice ?? prod.pricePerBox ?? 0 : prod.unitPrice ?? 0;
+    return price ? String(price) : "";
+  };
 
   const [showForm, setShowForm] = useState(false);
   const [view, setView] = useState<"list" | "grid">("list");
@@ -77,6 +86,7 @@ export default function StockMovement() {
     isReturn: false,
     unit: "box" as "box" | "piece",
     qty: "",
+    unitPrice: "",
   });
   const [editSaving, setEditSaving] = useState(false);
   const canEditExisting = userRole === "manager";
@@ -92,7 +102,13 @@ export default function StockMovement() {
 
   // Multi-product items list
   const [items, setItems] = useState<ProductItemRow[]>([
-    { id: uid(), productId: products[0]?.id ?? "", unit: "box", qty: "" },
+    {
+      id: uid(),
+      productId: products[0]?.id ?? "",
+      unit: "box",
+      qty: "",
+      unitPrice: defaultPriceFor(products[0]?.id ?? "", "box"),
+    },
   ]);
 
   const [productFilter, setProductFilter] = useState<"all" | string>("all");
@@ -135,7 +151,13 @@ export default function StockMovement() {
   const addItemRow = () => {
     setItems((prev) => [
       ...prev,
-      { id: uid(), productId: products[0]?.id ?? "", unit: "box", qty: "" },
+      {
+        id: uid(),
+        productId: products[0]?.id ?? "",
+        unit: "box",
+        qty: "",
+        unitPrice: defaultPriceFor(products[0]?.id ?? "", "box"),
+      },
     ]);
   };
 
@@ -150,7 +172,19 @@ export default function StockMovement() {
     value: string,
   ) => {
     setItems((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, [field]: value } : item)),
+      prev.map((item) => {
+        if (item.id !== id) return item;
+        const updated = { ...item, [field]: value };
+        // Product or unit changed — refresh the suggested price, agent
+        // can still overwrite it per delivery in the field below
+        if (field === "productId" || field === "unit") {
+          updated.unitPrice = defaultPriceFor(
+            field === "productId" ? value : item.productId,
+            (field === "unit" ? value : item.unit) as "box" | "piece",
+          );
+        }
+        return updated;
+      }),
     );
   };
 
@@ -309,11 +343,14 @@ export default function StockMovement() {
 
         const prevBalance = getRunningBalance(item.productId);
 
+        // 💰 Agent can override price per delivery line — falls back to
+        // the product's default price if left blank
         const lineUnitPrice =
           commonForm.type === "marketing_agent"
-            ? item.unit === "box"
-              ? prod?.boxPrice ?? prod?.pricePerBox ?? 0
-              : prod?.unitPrice ?? 0
+            ? parseFloat(item.unitPrice) ||
+              (item.unit === "box"
+                ? prod?.boxPrice ?? prod?.pricePerBox ?? 0
+                : prod?.unitPrice ?? 0)
             : null;
         const lineTotalPrice =
           lineUnitPrice != null ? parseFloat((qty * lineUnitPrice).toFixed(2)) : null;
@@ -416,7 +453,13 @@ export default function StockMovement() {
 
       // Reset items and close form
       setItems([
-        { id: uid(), productId: products[0]?.id ?? "", unit: "box", qty: "" },
+        {
+          id: uid(),
+          productId: products[0]?.id ?? "",
+          unit: "box",
+          qty: "",
+          unitPrice: defaultPriceFor(products[0]?.id ?? "", "box"),
+        },
       ]);
       setShowForm(false);
     } catch (err: any) {
@@ -439,6 +482,8 @@ export default function StockMovement() {
       isReturn: m.isReturn,
       unit: m.unit,
       qty: String(m.enteredQty),
+      unitPrice:
+        m.unitPrice != null ? String(m.unitPrice) : defaultPriceFor(m.productId, m.unit),
     });
   };
 
@@ -472,9 +517,10 @@ export default function StockMovement() {
 
       const lineUnitPrice =
         editForm.type === "marketing_agent"
-          ? editForm.unit === "box"
-            ? prod?.boxPrice ?? prod?.pricePerBox ?? 0
-            : prod?.unitPrice ?? 0
+          ? parseFloat(editForm.unitPrice) ||
+            (editForm.unit === "box"
+              ? prod?.boxPrice ?? prod?.pricePerBox ?? 0
+              : prod?.unitPrice ?? 0)
           : null;
       const lineTotalPrice = lineUnitPrice != null ? parseFloat((qty * lineUnitPrice).toFixed(2)) : null;
 
@@ -1016,6 +1062,26 @@ export default function StockMovement() {
                         )}
                     </div>
 
+                    {/* Price Input — price can vary by client/location */}
+                    {commonForm.type === "marketing_agent" && (
+                      <div className="w-36">
+                        <input
+                          type="number"
+                          step="any"
+                          min="0"
+                          value={item.unitPrice}
+                          onChange={(e) =>
+                            updateItemRow(item.id, "unitPrice", e.target.value)
+                          }
+                          placeholder="Price/unit"
+                          className="w-full px-3 py-2 text-sm border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30"
+                        />
+                        <div className="mt-1 text-[11px] text-muted">
+                          Price/{item.unit} — editable
+                        </div>
+                      </div>
+                    )}
+
                     {/* Delete row */}
                     {items.length > 1 && (
                       <button
@@ -1460,6 +1526,23 @@ export default function StockMovement() {
                   className="w-full px-3 py-2 text-sm border border-border rounded-[var(--radius)]"
                 />
               </div>
+
+              {editForm.type === "marketing_agent" && (
+                <div>
+                  <label className="text-xs text-muted uppercase tracking-wide block mb-1.5">
+                    Price per {editForm.unit} (varies by client/location)
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    min="0"
+                    value={editForm.unitPrice}
+                    onChange={(e) => setEditForm((f) => ({ ...f, unitPrice: e.target.value }))}
+                    placeholder="Price/unit"
+                    className="w-full px-3 py-2 text-sm border border-border rounded-[var(--radius)]"
+                  />
+                </div>
+              )}
 
               <div className="flex justify-end gap-3 pt-3 border-t border-border">
                 <button
