@@ -7,8 +7,6 @@ import {
   Pencil,
   List,
   LayoutGrid,
-  Printer,
-  Download,
 } from "lucide-react";
 import { useStore } from "../lib/store";
 import { supabase } from "../lib/supabase";
@@ -284,6 +282,7 @@ export default function StockMovement() {
     // 🚨 Stock availability check — only applies to stock-out movements
     if (!isStockIn) {
       const overStockLines: string[] = [];
+      const checkBalances = new Map<string, number>(); // local to this check only, doesn't touch runningBalances
 
       for (const item of validItems) {
         const qty = parseFloat(item.qty);
@@ -297,14 +296,16 @@ export default function StockMovement() {
               : qty
             : qty;
 
-        const available = getRunningBalance(item.productId);
+        const available = checkBalances.has(item.productId)
+          ? checkBalances.get(item.productId)!
+          : getRunningBalance(item.productId);
 
         if (boxesQty > available) {
           overStockLines.push(
             `<li style="margin-bottom:4px;"><b>${prod?.name ?? "Unknown Product"}</b>: requesting <b>${boxesQty}</b> boxes, only <b>${available}</b> in stock</li>`,
           );
         } else {
-          runningBalances.set(item.productId, available - boxesQty);
+          checkBalances.set(item.productId, available - boxesQty);
         }
       }
 
