@@ -33,6 +33,10 @@ type Action =
   | { type: "DELETE_CLIENT"; id: string }
   | { type: "ADD_STOCK_MOVEMENT"; payload: StockMovement }
   | { type: "UPDATE_STOCK_MOVEMENTS"; payload: StockMovement[] }
+  | {
+      type: "DELETE_STOCK_MOVEMENT";
+      payload: { id: string; updatedBalances: { id: string; balance: number }[] };
+    }
   | { type: "ADD_AGENT_REPORT"; payload: AgentReport }
   | { type: "UPDATE_AGENT_REPORT"; payload: AgentReport }
   | { type: "DELETE_AGENT_REPORT"; id: string }
@@ -121,6 +125,16 @@ function reducer(state: AppState, action: Action): AppState {
         stockMovements: state.stockMovements.map((m) =>
           updatedById.has(m.id) ? { ...m, ...updatedById.get(m.id)! } : m,
         ),
+      };
+    }
+    case "DELETE_STOCK_MOVEMENT": {
+      const { id, updatedBalances } = action.payload;
+      const balanceMap = new Map(updatedBalances.map((u) => [u.id, u.balance]));
+      return {
+        ...state,
+        stockMovements: state.stockMovements
+          .filter((m) => m.id !== id)
+          .map((m) => (balanceMap.has(m.id) ? { ...m, balance: balanceMap.get(m.id)! } : m)),
       };
     }
     case "ADD_AGENT_REPORT":

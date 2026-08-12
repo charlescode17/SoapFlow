@@ -124,11 +124,11 @@ export default function Versaiment() {
     <div className="p-4 sm:p-6 lg:p-8 max-w-6xl">
       {/* Hero */}
       <div className="relative overflow-hidden rounded-[var(--radius-lg)] bg-gradient-to-br from-primary via-primary to-emerald-600 text-white p-5 sm:p-7 mb-6 shadow-lg">
-        <div className="pointer-events-none absolute -right-10 -top-14 w-56 h-56 rounded-full bg-white/10" />
-        <div className="pointer-events-none absolute -right-32 top-10 w-72 h-72 rounded-full bg-white/[0.06]" />
+        <div className="pointer-events-none absolute -right-10 -top-14 w-56 h-56 rounded-full bg-card/10" />
+        <div className="pointer-events-none absolute -right-32 top-10 w-72 h-72 rounded-full bg-card/[0.06]" />
         <div className="relative flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <div className="inline-flex items-center gap-1.5 bg-white/15 backdrop-blur-sm px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wider mb-2.5">
+            <div className="inline-flex items-center gap-1.5 bg-card/15 backdrop-blur-sm px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wider mb-2.5">
               <Wallet size={11} />
               Versaiment
             </div>
@@ -138,11 +138,11 @@ export default function Versaiment() {
             </p>
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <div className="bg-white/10 backdrop-blur-sm border border-white/15 rounded-[var(--radius)] px-4 py-2.5">
+            <div className="bg-card/10 backdrop-blur-sm border border-white/15 rounded-[var(--radius)] px-4 py-2.5">
               <div className="text-[10px] font-semibold text-white/70 uppercase tracking-wide">Pending</div>
               <div className="text-base font-bold">{fmt(totalPending)}</div>
             </div>
-            <div className="bg-white/10 backdrop-blur-sm border border-white/15 rounded-[var(--radius)] px-4 py-2.5">
+            <div className="bg-card/10 backdrop-blur-sm border border-white/15 rounded-[var(--radius)] px-4 py-2.5">
               <div className="text-[10px] font-semibold text-white/70 uppercase tracking-wide">Approved</div>
               <div className="text-base font-bold">{fmt(totalApproved)}</div>
             </div>
@@ -159,7 +159,7 @@ export default function Versaiment() {
               setPickedAgentId(e.target.value);
               setSelected([]);
             }}
-            className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] bg-white focus:outline-none focus:ring-2 focus:ring-primary/30"
+            className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
           >
             {activeAgents.map((a) => (
               <option key={a.id} value={a.id}>{a.name}</option>
@@ -192,7 +192,7 @@ export default function Versaiment() {
             />
             <button
               onClick={approveSelected}
-              className="px-3.5 py-1.5 text-xs font-semibold bg-white text-primary rounded-[var(--radius)] hover:bg-white/90 transition-colors"
+              className="px-3.5 py-1.5 text-xs font-semibold bg-card text-primary rounded-[var(--radius)] hover:bg-card/90 transition-colors"
             >
               Approve Selected
             </button>

@@ -37,6 +37,13 @@ const TYPE_LABELS: Record<StockType, string> = {
   other: "Other Adjustment",
 };
 
+const TYPE_COLORS: Record<StockType, string> = {
+  production: "bg-success/10 text-success border-success/30",
+  marketing_agent: "bg-secondary/10 text-secondary border-secondary/30",
+  customer_sale: "bg-primary/10 text-primary border-primary/30",
+  other: "bg-muted/10 text-muted border-muted/30",
+};
+
 const MOVEMENT_TYPES: { value: StockType; label: string }[] = [
   { value: "production", label: "Production Stock" },
   { value: "marketing_agent", label: "Agent Dispatch" },
@@ -174,6 +181,26 @@ export default function StockMovement() {
     }
 
     const isStockIn = commonForm.type === "production" || commonForm.isReturn;
+
+    // 📊 Running trackers — fixes balance/remaining being wrong when 2+ lines
+    // in ONE submission touch the same product (each line now sees the
+    // previous line's effect instead of the stale snapshot)
+    const runningBalances = new Map<string, number>();
+    const runningRemaining = new Map<string, number>();
+    const getRunningBalance = (productId: string) => {
+      if (!runningBalances.has(productId)) {
+        runningBalances.set(productId, lastBalance(state.stockMovements, productId));
+      }
+      return runningBalances.get(productId)!;
+    };
+    const getRunningRemaining = (agentId: string, productId: string) => {
+      const key = `${agentId}:${productId}`;
+      if (!runningRemaining.has(key)) {
+        runningRemaining.set(key, getAgentRemaining(agentId, productId));
+      }
+      return runningRemaining.get(key)!;
+    };
+
     // 🔁 Return quantity check — agent can't return more than what they're holding
     if (commonForm.type === "marketing_agent" && commonForm.isReturn) {
       const overReturnLines: string[] = [];
@@ -190,12 +217,14 @@ export default function StockMovement() {
               : qty
             : qty;
 
-        const remaining = getAgentRemaining(commonForm.agentId, item.productId);
+        const remaining = getRunningRemaining(commonForm.agentId, item.productId);
 
         if (boxesQty > remaining) {
           overReturnLines.push(
             `<li style="margin-bottom:4px;"><b>${prod?.name ?? "Unknown Product"}</b>: trying to return <b>${boxesQty}</b> boxes, agent only has <b>${remaining}</b> boxes left</li>`,
           );
+        } else {
+          runningRemaining.set(`${commonForm.agentId}:${item.productId}`, remaining - boxesQty);
         }
       }
 
@@ -234,12 +263,14 @@ export default function StockMovement() {
               : qty
             : qty;
 
-        const available = lastBalance(state.stockMovements, item.productId);
+        const available = getRunningBalance(item.productId);
 
         if (boxesQty > available) {
           overStockLines.push(
             `<li style="margin-bottom:4px;"><b>${prod?.name ?? "Unknown Product"}</b>: requesting <b>${boxesQty}</b> boxes, only <b>${available}</b> in stock</li>`,
           );
+        } else {
+          runningBalances.set(item.productId, available - boxesQty);
         }
       }
 
@@ -276,7 +307,7 @@ export default function StockMovement() {
         const prod = products.find((p) => p.id === item.productId);
         const piecesPerBox = prod?.piecesPerBox ?? prod?.qtyPerBox ?? null;
 
-        const prevBalance = lastBalance(state.stockMovements, item.productId);
+        const prevBalance = getRunningBalance(item.productId);
 
         const lineUnitPrice =
           commonForm.type === "marketing_agent"
@@ -306,6 +337,7 @@ export default function StockMovement() {
         const newBalance = parseFloat(
           (prevBalance + stockIn - stockOut).toFixed(3),
         );
+        runningBalances.set(item.productId, newBalance); // keep next line in sync
 
         const { data, error } = await supabase
           .from("stock_movements")
@@ -529,6 +561,68 @@ export default function StockMovement() {
       setEditSaving(false);
     }
   };
+
+  const handleDeleteMovement = async (m: Movement) => {
+    const result = await Swal.fire({
+      icon: "warning",
+      title: "Delete this movement?",
+      html: `
+        <div style="text-align:left; font-size:13px;">
+          <p>You're about to delete:</p>
+          <ul style="margin:8px 0; padding-left:18px;">
+            <li><b>${getProductName(m.productId)}</b> — ${movementLabel(m.type)}${m.isReturn ? " (Return)" : ""}</li>
+            <li>${fmtDate(m.date)} · ${m.stockIn > 0 ? `+${m.stockIn}` : `-${m.stockOut}`} boxes</li>
+          </ul>
+          <p>The running balance for this product will be recalculated. This can't be undone.</p>
+        </div>
+      `,
+      showCancelButton: true,
+      confirmButtonText: "Delete",
+      cancelButtonText: "Cancel",
+      confirmButtonColor: "#dc2626",
+    });
+    if (!result.isConfirmed) return;
+
+    try {
+      const productChain = state.stockMovements.filter((mv) => mv.productId === m.productId);
+      const deleteIndex = productChain.findIndex((mv) => mv.id === m.id);
+      const prevBalance = deleteIndex > 0 ? productChain[deleteIndex - 1].balance : 0;
+
+      const laterUpdates: { id: string; balance: number }[] = [];
+      let runningBalance = prevBalance;
+      for (let i = deleteIndex + 1; i < productChain.length; i++) {
+        const mv = productChain[i];
+        runningBalance = parseFloat((runningBalance + mv.stockIn - mv.stockOut).toFixed(3));
+        laterUpdates.push({ id: mv.id, balance: runningBalance });
+      }
+
+      const { error: delError } = await supabase.from("stock_movements").delete().eq("id", m.id);
+      if (delError) throw delError;
+
+      for (const u of laterUpdates) {
+        const { error } = await supabase.from("stock_movements").update({ balance: u.balance }).eq("id", u.id);
+        if (error) throw error;
+      }
+
+      dispatch({
+        type: "DELETE_STOCK_MOVEMENT",
+        payload: { id: m.id, updatedBalances: laterUpdates },
+      });
+
+      await supabase.from("activity_logs").insert({
+        actor_id: state.user?.id,
+        actor_name: state.user?.name ?? "unknown",
+        action: "deleted",
+        entity_type: "stock_movement",
+        entity_name: `${getProductName(m.productId)} — ${movementLabel(m.type)}${m.isReturn ? " (Return)" : ""} (qty ${m.enteredQty})`,
+      });
+
+      Swal.fire({ icon: "success", title: "Movement Deleted", timer: 1500, showConfirmButton: false });
+    } catch (err: any) {
+      Swal.fire({ icon: "error", title: "Delete Failed", text: err.message || "Failed to delete stock movement." });
+    }
+  };
+
   // Export CSV Excel
   const handleExportCSV = () => {
     const csvHeaders = [
@@ -623,6 +717,54 @@ export default function StockMovement() {
         </div>
       </div>
 
+      {/* Quick Stats */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6 no-print">
+        <div className="bg-card border border-border rounded-[var(--radius-lg)] p-4 flex items-center gap-3">
+          <div className="p-2 rounded-full bg-success/10 text-success">
+            <ArrowDownCircle size={18} />
+          </div>
+          <div>
+            <div className="text-[11px] text-muted uppercase tracking-wide">Total Stock In</div>
+            <div className="text-base text-foreground font-semibold">
+              {state.stockMovements.reduce((s, m) => s + m.stockIn, 0).toLocaleString()} boxes
+            </div>
+          </div>
+        </div>
+        <div className="bg-card border border-border rounded-[var(--radius-lg)] p-4 flex items-center gap-3">
+          <div className="p-2 rounded-full bg-danger/10 text-danger">
+            <ArrowUpCircle size={18} />
+          </div>
+          <div>
+            <div className="text-[11px] text-muted uppercase tracking-wide">Total Stock Out</div>
+            <div className="text-base text-foreground font-semibold">
+              {state.stockMovements.reduce((s, m) => s + m.stockOut, 0).toLocaleString()} boxes
+            </div>
+          </div>
+        </div>
+        <div className="bg-card border border-border rounded-[var(--radius-lg)] p-4 flex items-center gap-3">
+          <div className="p-2 rounded-full bg-primary/10 text-primary">
+            <LayoutGrid size={18} />
+          </div>
+          <div>
+            <div className="text-[11px] text-muted uppercase tracking-wide">Current Balance</div>
+            <div className="text-base text-foreground font-semibold">
+              {products.reduce((sum, p) => sum + lastBalance(state.stockMovements, p.id), 0).toLocaleString()} boxes
+            </div>
+          </div>
+        </div>
+        <div className="bg-card border border-border rounded-[var(--radius-lg)] p-4 flex items-center gap-3">
+          <div className="p-2 rounded-full bg-accent text-foreground">
+            <List size={18} />
+          </div>
+          <div>
+            <div className="text-[11px] text-muted uppercase tracking-wide">Total Movements</div>
+            <div className="text-base text-foreground font-semibold">
+              {state.stockMovements.length.toLocaleString()}
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* Printable Report Header */}
       <div className="hidden print:block mb-6 border-b border-border pb-4">
         {/* <div className="text-xl text-foreground uppercase tracking-wide">
@@ -662,7 +804,7 @@ export default function StockMovement() {
                     setCommonForm((f) => ({ ...f, date: e.target.value }))
                   }
                   required
-                  className="w-full px-3.5 py-2 text-sm border border-border rounded-[var(--radius)] bg-white focus:outline-none focus:ring-2 focus:ring-primary/30"
+                  className="w-full px-3.5 py-2 text-sm border border-border rounded-[var(--radius)] bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
                 />
               </div>
 
@@ -678,7 +820,7 @@ export default function StockMovement() {
                       type: e.target.value as StockType,
                     }))
                   }
-                  className="w-full px-3.5 py-2 text-sm border border-border rounded-[var(--radius)] bg-white focus:outline-none focus:ring-2 focus:ring-primary/30"
+                  className="w-full px-3.5 py-2 text-sm border border-border rounded-[var(--radius)] bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
                 >
                   {MOVEMENT_TYPES.map((t) => (
                     <option key={t.value} value={t.value}>
@@ -702,7 +844,7 @@ export default function StockMovement() {
                           agentId: e.target.value,
                         }))
                       }
-                      className="w-full px-3.5 py-2 text-sm border border-border rounded-[var(--radius)] bg-white focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      className="w-full px-3.5 py-2 text-sm border border-border rounded-[var(--radius)] bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
                     >
                       <option value="">Select agent</option>
                       {agents.map((a) => (
@@ -726,7 +868,7 @@ export default function StockMovement() {
                         }))
                       }
                       placeholder="e.g. Gikondo Market / Kigali"
-                      className="w-full px-3.5 py-2 text-sm border border-border rounded-[var(--radius)] bg-white focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      className="w-full px-3.5 py-2 text-sm border border-border rounded-[var(--radius)] bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                   </div>
                 </>
@@ -790,7 +932,7 @@ export default function StockMovement() {
                         onChange={(e) =>
                           updateItemRow(item.id, "productId", e.target.value)
                         }
-                        className="w-full px-3 py-2 text-sm border border-border rounded-[var(--radius)] bg-white focus:outline-none focus:ring-2 focus:ring-primary/30"
+                        className="w-full px-3 py-2 text-sm border border-border rounded-[var(--radius)] bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
                       >
                         {products.map((p) => (
                           <option key={p.id} value={p.id}>
@@ -975,11 +1117,31 @@ export default function StockMovement() {
           {filteredMovements.map((m) => (
             <div
               key={m.id}
-              className="bg-card border border-border rounded-[var(--radius-lg)] p-5 hover:shadow-md hover:-translate-y-0.5 transition-all duration-200"
+              className="group relative bg-card border border-border rounded-[var(--radius-lg)] p-5 hover:shadow-md hover:-translate-y-0.5 transition-all duration-200"
             >
+              {canEditExisting && (
+                <div className="absolute top-3 right-3 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button
+                    type="button"
+                    onClick={() => openEditModal(m)}
+                    className="p-1.5 bg-card border border-border text-muted hover:text-primary hover:bg-primary/10 rounded-[var(--radius-sm)] shadow-sm"
+                    title="Edit movement"
+                  >
+                    <Pencil size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteMovement(m)}
+                    className="p-1.5 bg-card border border-border text-muted hover:text-danger hover:bg-danger/10 rounded-[var(--radius-sm)] shadow-sm"
+                    title="Delete movement"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              )}
               <div className="flex items-start justify-between mb-3">
                 <div className="flex items-center gap-1.5">
-                  <span className="text-xs text-foreground bg-background border border-border px-2.5 py-0.5 rounded-full">
+                  <span className={`text-xs px-2.5 py-0.5 rounded-full border ${TYPE_COLORS[m.type]}`}>
                     {movementLabel(m.type)}
                   </span>
                   {m.isReturn && (
@@ -988,7 +1150,7 @@ export default function StockMovement() {
                     </span>
                   )}
                 </div>
-                <span className="text-xs text-muted font-mono">
+                <span className="text-xs text-muted font-mono pr-14">
                   {fmtDate(m.date)}
                 </span>
               </div>
@@ -1095,8 +1257,10 @@ export default function StockMovement() {
                     </td>
 
                     {/* 3. Type */}
-                    <td className="px-4 py-3 text-xs text-muted whitespace-nowrap">
-                      {movementLabel(m.type)}
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <span className={`text-[11px] px-2 py-0.5 rounded-full border ${TYPE_COLORS[m.type]}`}>
+                        {movementLabel(m.type)}
+                      </span>
                     </td>
 
                     {/* 4. Agent */}
@@ -1146,14 +1310,24 @@ export default function StockMovement() {
                     {/* 9. Actions */}
                     {canEditExisting && (
                       <td className="px-4 py-3 text-right whitespace-nowrap">
-                        <button
-                          type="button"
-                          onClick={() => openEditModal(m)}
-                          className="p-1.5 text-muted hover:text-primary hover:bg-primary/10 rounded-[var(--radius-sm)] transition-colors"
-                          title="Edit movement"
-                        >
-                          <Pencil size={14} />
-                        </button>
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            type="button"
+                            onClick={() => openEditModal(m)}
+                            className="p-1.5 text-muted hover:text-primary hover:bg-primary/10 rounded-[var(--radius-sm)] transition-colors"
+                            title="Edit movement"
+                          >
+                            <Pencil size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteMovement(m)}
+                            className="p-1.5 text-muted hover:text-danger hover:bg-danger/10 rounded-[var(--radius-sm)] transition-colors"
+                            title="Delete movement"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
                       </td>
                     )}
                   </tr>
@@ -1207,7 +1381,7 @@ export default function StockMovement() {
                     value={editForm.date}
                     onChange={(e) => setEditForm((f) => ({ ...f, date: e.target.value }))}
                     required
-                    className="w-full px-3 py-2 text-sm border border-border rounded-[var(--radius)] bg-white"
+                    className="w-full px-3 py-2 text-sm border border-border rounded-[var(--radius)] bg-card"
                   />
                 </div>
                 <div>
@@ -1215,7 +1389,7 @@ export default function StockMovement() {
                   <select
                     value={editForm.type}
                     onChange={(e) => setEditForm((f) => ({ ...f, type: e.target.value as StockType }))}
-                    className="w-full px-3 py-2 text-sm border border-border rounded-[var(--radius)] bg-white"
+                    className="w-full px-3 py-2 text-sm border border-border rounded-[var(--radius)] bg-card"
                   >
                     {MOVEMENT_TYPES.map((t) => (
                       <option key={t.value} value={t.value}>{t.label}</option>
@@ -1231,7 +1405,7 @@ export default function StockMovement() {
                     <select
                       value={editForm.agentId}
                       onChange={(e) => setEditForm((f) => ({ ...f, agentId: e.target.value }))}
-                      className="w-full px-3 py-2 text-sm border border-border rounded-[var(--radius)] bg-white"
+                      className="w-full px-3 py-2 text-sm border border-border rounded-[var(--radius)] bg-card"
                     >
                       <option value="">Select agent</option>
                       {agents.map((a) => (
@@ -1244,7 +1418,7 @@ export default function StockMovement() {
                     <input
                       value={editForm.location}
                       onChange={(e) => setEditForm((f) => ({ ...f, location: e.target.value }))}
-                      className="w-full px-3 py-2 text-sm border border-border rounded-[var(--radius)] bg-white"
+                      className="w-full px-3 py-2 text-sm border border-border rounded-[var(--radius)] bg-card"
                     />
                   </div>
                   <label className="col-span-2 flex items-center gap-2 cursor-pointer bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-[var(--radius)] w-fit">

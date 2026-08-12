@@ -620,7 +620,7 @@ export default function Clients() {
                     sector: "",
                   }))
                 }
-                className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] bg-white focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+                className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] bg-card focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
               >
                 <option value="">Select district</option>
                 {districts.map((d) => (
@@ -636,7 +636,7 @@ export default function Clients() {
                 value={form.sector}
                 onChange={setF("sector")}
                 disabled={!form.district}
-                className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] bg-white focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary disabled:opacity-50"
+                className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] bg-card focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary disabled:opacity-50"
               >
                 <option value="">
                   {form.district ? "Select sector" : "Select district first"}
@@ -665,7 +665,7 @@ export default function Clients() {
                 value={form.agentId}
                 onChange={setF("agentId")}
                 disabled={role === "marketing_agent"}
-                className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] bg-white focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary disabled:opacity-60"
+                className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] bg-card focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary disabled:opacity-60"
               >
                 <option value="">Select Marketing Agent (Handler)</option>
                 {marketingAgents.map((a) => (

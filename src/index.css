@@ -40,6 +40,7 @@
   --color-muted: #8B9B97;
   --color-border: #26302D;
   --color-accent: #1B2B28;
+  color-scheme: dark;
 }
 
 body {

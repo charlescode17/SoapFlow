@@ -284,7 +284,7 @@ const handleConfirmPayment = async () => {
                   setPickedAgentId(e.target.value);
                   selectClient("");
                 }}
-                className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] bg-white focus:outline-none focus:ring-2 focus:ring-primary/30"
+                className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
               >
                 <option value="">Select agent</option>
                 {activeAgents.map((a) => (
@@ -309,7 +309,7 @@ const handleConfirmPayment = async () => {
                     value={clientId}
                     onChange={(e) => selectClient(e.target.value)}
                     disabled={!isAgent && !pickedAgentId}
-                    className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] bg-white focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50"
+                    className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] bg-card focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50"
                   >
                     <option value="">Select client</option>
                     {clientOptions.map((c) => (
@@ -408,7 +408,7 @@ const handleConfirmPayment = async () => {
                         <select
                           value={bankId}
                           onChange={(e) => setBankId(e.target.value)}
-                          className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] bg-white focus:outline-none focus:ring-2 focus:ring-primary/30"
+                          className="w-full px-3.5 py-2.5 text-sm border border-border rounded-[var(--radius)] bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
                         >
                           <option value="">Select bank</option>
                           {state.banks.map((b) => (

@@ -1253,11 +1253,11 @@ export default function Report() {
       <div className="p-4 sm:p-6 lg:p-8 max-w-7xl">
         {/* Premium accent banner */}
         <div className="relative overflow-hidden rounded-[var(--radius-lg)] bg-primary text-white p-5 sm:p-7 mb-6 shadow-lg">
-          <div className="pointer-events-none absolute -right-10 -top-14 w-48 h-48 rounded-full bg-white/10" />
-          <div className="pointer-events-none absolute -right-28 top-6 w-64 h-64 rounded-full bg-white/[0.06]" />
+          <div className="pointer-events-none absolute -right-10 -top-14 w-48 h-48 rounded-full bg-card/10" />
+          <div className="pointer-events-none absolute -right-28 top-6 w-64 h-64 rounded-full bg-card/[0.06]" />
           <div className="relative flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
-              <div className="inline-flex items-center gap-1.5 bg-white/15 backdrop-blur-sm px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wider mb-2.5">
+              <div className="inline-flex items-center gap-1.5 bg-card/15 backdrop-blur-sm px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wider mb-2.5">
                 <Package size={11} />
                 Stock Agent
               </div>
@@ -1270,14 +1270,14 @@ export default function Report() {
               {hiddenCount > 0 && (
                 <button
                   onClick={resetHiddenSections}
-                  className="flex items-center gap-1 text-xs font-semibold text-white bg-white/15 hover:bg-white/25 border border-white/20 px-3 py-2 rounded-[var(--radius)] transition-colors backdrop-blur-sm"
+                  className="flex items-center gap-1 text-xs font-semibold text-white bg-card/15 hover:bg-card/25 border border-white/20 px-3 py-2 rounded-[var(--radius)] transition-colors backdrop-blur-sm"
                 >
                   <RotateCcw size={12} /> Show all ({hiddenCount})
                 </button>
               )}
               <button
                 onClick={handleSaExportCsv}
-                className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-white/15 hover:bg-white/25 text-white border border-white/20 rounded-[var(--radius)] transition-colors backdrop-blur-sm"
+                className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-card/15 hover:bg-card/25 text-white border border-white/20 rounded-[var(--radius)] transition-colors backdrop-blur-sm"
               >
                 <Download size={15} />
                 <span>CSV</span>
@@ -1285,14 +1285,14 @@ export default function Report() {
               <button
                 onClick={handleSaExportExcel}
                 disabled={isExportingExcel}
-                className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-white/15 hover:bg-white/25 text-white border border-white/20 rounded-[var(--radius)] transition-colors backdrop-blur-sm disabled:opacity-60"
+                className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-card/15 hover:bg-card/25 text-white border border-white/20 rounded-[var(--radius)] transition-colors backdrop-blur-sm disabled:opacity-60"
               >
                 <FileSpreadsheet size={15} />
                 <span>{isExportingExcel ? "Preparing..." : "Excel"}</span>
               </button>
               <button
                 onClick={handleSaExportPdf}
-                className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-white/15 hover:bg-white/25 text-white border border-white/20 rounded-[var(--radius)] transition-colors backdrop-blur-sm"
+                className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-card/15 hover:bg-card/25 text-white border border-white/20 rounded-[var(--radius)] transition-colors backdrop-blur-sm"
               >
                 <FileText size={15} />
                 <span>PDF</span>
@@ -1326,7 +1326,7 @@ export default function Report() {
           <div className="ml-auto">
             <label className="text-[10px] font-semibold text-muted uppercase tracking-wide block mb-1.5">Agent</label>
             <select value={agentFilter} onChange={(e) => setAgentFilter(e.target.value)}
-              className="px-3 py-1.5 text-xs border border-border rounded-[var(--radius)] bg-white focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary">
+              className="px-3 py-1.5 text-xs border border-border rounded-[var(--radius)] bg-card focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary">
               <option value="all">All Agents</option>
               {agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
             </select>
@@ -2153,11 +2153,11 @@ export default function Report() {
     return (
       <div className="p-4 sm:p-6 lg:p-8 max-w-7xl">
         <div className="relative overflow-hidden rounded-[var(--radius-lg)] bg-primary text-white p-5 sm:p-7 mb-6 shadow-lg">
-          <div className="pointer-events-none absolute -right-10 -top-14 w-48 h-48 rounded-full bg-white/10" />
-          <div className="pointer-events-none absolute -right-28 top-6 w-64 h-64 rounded-full bg-white/[0.06]" />
+          <div className="pointer-events-none absolute -right-10 -top-14 w-48 h-48 rounded-full bg-card/10" />
+          <div className="pointer-events-none absolute -right-28 top-6 w-64 h-64 rounded-full bg-card/[0.06]" />
           <div className="relative flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
-              <div className="inline-flex items-center gap-1.5 bg-white/15 backdrop-blur-sm px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wider mb-2.5">
+              <div className="inline-flex items-center gap-1.5 bg-card/15 backdrop-blur-sm px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wider mb-2.5">
                 <Users size={11} />
                 Marketing Agent
               </div>
@@ -2171,7 +2171,7 @@ export default function Report() {
             <div className="flex items-center gap-2 flex-wrap">
               <button
                 onClick={handleMaExportCsv}
-                className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-white/15 hover:bg-white/25 text-white border border-white/20 rounded-[var(--radius)] transition-colors backdrop-blur-sm"
+                className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-card/15 hover:bg-card/25 text-white border border-white/20 rounded-[var(--radius)] transition-colors backdrop-blur-sm"
               >
                 <Download size={15} />
                 <span>CSV</span>
@@ -2179,14 +2179,14 @@ export default function Report() {
               <button
                 onClick={handleMaExportExcel}
                 disabled={isExportingExcel}
-                className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-white/15 hover:bg-white/25 text-white border border-white/20 rounded-[var(--radius)] transition-colors backdrop-blur-sm disabled:opacity-60"
+                className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-card/15 hover:bg-card/25 text-white border border-white/20 rounded-[var(--radius)] transition-colors backdrop-blur-sm disabled:opacity-60"
               >
                 <FileSpreadsheet size={15} />
                 <span>{isExportingExcel ? "Preparing..." : "Excel"}</span>
               </button>
               <button
                 onClick={handleMaExportPdf}
-                className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-white/15 hover:bg-white/25 text-white border border-white/20 rounded-[var(--radius)] transition-colors backdrop-blur-sm"
+                className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-card/15 hover:bg-card/25 text-white border border-white/20 rounded-[var(--radius)] transition-colors backdrop-blur-sm"
               >
                 <Printer size={15} />
                 <span>PDF</span>
@@ -2826,11 +2826,11 @@ export default function Report() {
         <>
           {/* Premium Manager hero */}
           <div className="relative overflow-hidden rounded-[var(--radius-lg)] bg-gradient-to-br from-primary via-primary to-indigo-600 text-white p-5 sm:p-7 mb-6 shadow-lg">
-            <div className="pointer-events-none absolute -right-10 -top-14 w-56 h-56 rounded-full bg-white/10" />
-            <div className="pointer-events-none absolute -right-32 top-10 w-72 h-72 rounded-full bg-white/[0.06]" />
+            <div className="pointer-events-none absolute -right-10 -top-14 w-56 h-56 rounded-full bg-card/10" />
+            <div className="pointer-events-none absolute -right-32 top-10 w-72 h-72 rounded-full bg-card/[0.06]" />
             <div className="relative flex flex-col lg:flex-row lg:items-center justify-between gap-4">
               <div>
-                <div className="inline-flex items-center gap-1.5 bg-white/15 backdrop-blur-sm px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wider mb-2.5">
+                <div className="inline-flex items-center gap-1.5 bg-card/15 backdrop-blur-sm px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wider mb-2.5">
                   <BarChart3 size={11} />
                   Manager
                 </div>
@@ -2845,7 +2845,7 @@ export default function Report() {
                 <div className="flex items-center gap-2 flex-wrap">
                   <button
                     onClick={handleExportCsv}
-                    className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-white/15 hover:bg-white/25 text-white border border-white/20 rounded-[var(--radius)] transition-colors backdrop-blur-sm"
+                    className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-card/15 hover:bg-card/25 text-white border border-white/20 rounded-[var(--radius)] transition-colors backdrop-blur-sm"
                   >
                     <Download size={15} />
                     <span>CSV</span>
@@ -2853,14 +2853,14 @@ export default function Report() {
                   <button
                     onClick={handleExportExcel}
                     disabled={isExportingExcel}
-                    className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-white/15 hover:bg-white/25 text-white border border-white/20 rounded-[var(--radius)] transition-colors backdrop-blur-sm disabled:opacity-60"
+                    className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-card/15 hover:bg-card/25 text-white border border-white/20 rounded-[var(--radius)] transition-colors backdrop-blur-sm disabled:opacity-60"
                   >
                     <FileSpreadsheet size={15} />
                     <span>{isExportingExcel ? "Preparing..." : "Excel"}</span>
                   </button>
                   <button
                     onClick={handleExportPdf}
-                    className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-white text-primary rounded-[var(--radius)] hover:bg-white/90 transition-colors shadow-sm"
+                    className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-card text-primary rounded-[var(--radius)] hover:bg-card/90 transition-colors shadow-sm"
                   >
                     <Printer size={15} />
                     <span>PDF</span>
@@ -2877,7 +2877,7 @@ export default function Report() {
                 { label: "Received (Payments)", value: fmt(paymentsTotal), icon: Banknote },
                 { label: "Active Agents", value: agents.length.toString(), icon: Users },
               ].map((k) => (
-                <div key={k.label} className="bg-white/10 backdrop-blur-sm border border-white/15 rounded-[var(--radius)] p-3">
+                <div key={k.label} className="bg-card/10 backdrop-blur-sm border border-white/15 rounded-[var(--radius)] p-3">
                   <div className="flex items-center gap-1.5 text-white/70 text-[10px] font-semibold uppercase tracking-wide mb-1">
                     <k.icon size={11} />
                     {k.label}
@@ -3711,15 +3711,15 @@ export default function Report() {
                 rows={loansByClient.map((l) => ({
                   key: l.client.id,
                   cells: [
-                    l.client.name,
-                    l.client.district,
+                    l.client.name ?? "—",
+                    l.client.district ?? "—",
                     l.qty.toString(),
                     fmt(l.issued),
                     fmt(l.paidInRange),
                     fmt(l.outstanding),
                   ],
-                  mobileTitle: l.client.name,
-                  mobileSub: `${l.client.district} · ${l.qty} boxes this period`,
+                  mobileTitle: l.client.name ?? "—",
+                  mobileSub: `${l.client.district ?? "—"} · ${l.qty} boxes this period`,
                   mobileLeft: `Issued: ${fmt(l.issued)}`,
                   mobileRight: fmt(l.outstanding),
                 }))}
@@ -3907,7 +3907,7 @@ export default function Report() {
               <select
                 value={agentFilter}
                 onChange={(e) => setAgentFilter(e.target.value)}
-                className="px-3 py-1.5 text-xs border border-border rounded-[var(--radius)] bg-white focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+                className="px-3 py-1.5 text-xs border border-border rounded-[var(--radius)] bg-card focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
               >
                 <option value="all">All Agents</option>
                 {agents.map((a) => (
@@ -4162,7 +4162,8 @@ function DetailTable({
                 } ${i === rows.length - 1 ? "border-b-0" : ""}`}
               >
                 {row.cells.map((cell, ci) => {
-                  const isAmount = cell.includes(",") || cell.startsWith("RWF");
+                  const safeCell = cell ?? "—";
+                  const isAmount = safeCell.includes(",") || safeCell.startsWith("RWF");
                   return (
                     <td
                       key={ci}
@@ -4172,7 +4173,7 @@ function DetailTable({
                           : "text-xs text-foreground"
                       }`}
                     >
-                      {cell}
+                      {safeCell}
                     </td>
                   );
                 })}
@@ -4424,10 +4425,10 @@ const singleAgentId = mergeAgentIds.length === 1 ? mergeAgentIds[0] : null;
   const clientRows = (agentId: string) =>
     clientRowsRaw(agentId).map(({ client, outstanding }) => ({
       key: client.id,
-      cells: [client.name, client.phone, client.district, outstanding > 0 ? fmt(outstanding) : "Settled"],
-      mobileTitle: client.name,
-      mobileSub: client.district,
-      mobileLeft: client.phone,
+      cells: [client.name ?? "—", client.phone ?? "—", client.district ?? "—", outstanding > 0 ? fmt(outstanding) : "Settled"],
+      mobileTitle: client.name ?? "—",
+      mobileSub: client.district ?? "—",
+      mobileLeft: client.phone ?? "—",
       mobileRight: outstanding > 0 ? fmt(outstanding) : "Settled",
     }));
 
@@ -4914,7 +4915,7 @@ const singleAgentId = mergeAgentIds.length === 1 ? mergeAgentIds[0] : null;
             <select
               value={singleAgentId ?? "all"}
               onChange={(e) => setMergeAgentIds(e.target.value === "all" ? [] : [e.target.value])}
-              className="px-3 py-1.5 text-xs border border-border rounded-[var(--radius)] bg-white focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary min-w-[180px]"
+              className="px-3 py-1.5 text-xs border border-border rounded-[var(--radius)] bg-card focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary min-w-[180px]"
             >
               <option value="all">Select an agent…</option>
               {agents.map((a) => (
