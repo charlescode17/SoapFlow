@@ -966,9 +966,9 @@ export default function Report() {
         heading: "Clients Handled",
         headers: ["Client", "Telephone", "District", "Outstanding"],
         rows: managerAgentClients.map(({ client, outstanding }) => [
-          client.name,
-          client.phone,
-          client.district,
+          client.name ?? "—",
+          client.phone ?? "—",
+          client.district ?? "—",
           outstanding > 0 ? fmt(outstanding) : "Settled",
         ]),
         numericColumns: [3],
@@ -1094,8 +1094,8 @@ export default function Report() {
           heading: "Client Loan Detail",
           headers: ["Client", "District", "Qty (period)", "Issued (period)", "Paid (period)", "Outstanding"],
           rows: loansByClient.map((l) => [
-            l.client.name,
-            l.client.district,
+            l.client.name ?? "—",
+            l.client.district ?? "—",
             l.qty,
             fmt(l.issued),
             fmt(l.paidInRange),
@@ -1949,7 +1949,6 @@ export default function Report() {
         exportRows.push([`— ${fmtDate(date)} —`, "", "", "", "", "", "", "", "", ""]);
 
         cash.forEach((p) => {
-          const client = clients.find((c) => c.id === p.clientId);
           const loanDate = getReportDate(p.reportId);
           exportRows.push([
             loanDate ? fmtDate(loanDate) : "—", getPaymentPartyName(p),
@@ -4692,7 +4691,7 @@ const singleAgentId = mergeAgentIds.length === 1 ? mergeAgentIds[0] : null;
       mergedClientGroups.forEach((g) => {
         rows.push([`— ${g.agentName} —`, "", "", "", "", ""]);
         g.rows.forEach(({ client, outstanding }) =>
-          rows.push([client.name, client.phone, client.district, client.sector, client.center, outstanding > 0 ? fmt(outstanding) : "Settled"]),
+          rows.push([client.name ?? "—", client.phone ?? "—", client.district ?? "—", client.sector ?? "—", client.center ?? "—", outstanding > 0 ? fmt(outstanding) : "Settled"]),
         );
         rows.push([`Subtotal — ${g.agentName}`, "", "", "", "", fmt(g.subtotal)]);
       });
@@ -4739,7 +4738,7 @@ const singleAgentId = mergeAgentIds.length === 1 ? mergeAgentIds[0] : null;
         sections: [{
           heading: "My Clients",
           headers: ["Client", "Telephone", "District", "Sector", "Center", "Outstanding"],
-          rows: rows.map(({ client, outstanding }) => [client.name, client.phone, client.district, client.sector, client.center, outstanding > 0 ? fmt(outstanding) : "Settled"]),
+          rows: rows.map(({ client, outstanding }) => [client.name ?? "—", client.phone ?? "—", client.district ?? "—", client.sector ?? "—", client.center ?? "—", outstanding > 0 ? fmt(outstanding) : "Settled"]),
           numericColumns: [5],
         }],
       };

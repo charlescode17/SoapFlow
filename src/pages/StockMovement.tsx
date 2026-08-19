@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   ArrowDownCircle,
   ArrowUpCircle,
@@ -7,6 +7,7 @@ import {
   Pencil,
   List,
   LayoutGrid,
+  RefreshCw,
 } from "lucide-react";
 import { useStore } from "../lib/store";
 import { supabase } from "../lib/supabase";
@@ -20,12 +21,24 @@ import Swal from "sweetalert2";
 // const COMPANY_NAME = "";
 
 type Movement = ReturnType<typeof useStore>["state"]["stockMovements"][number];
+type MovementWithIdx = Movement & { __idx: number };
+
+function getProductChain(movements: Movement[], productId: string): MovementWithIdx[] {
+  return movements
+    .map((m, idx) => ({ ...m, __idx: idx }))
+    .filter((m) => m.productId === productId)
+    .sort((a, b) => {
+      if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+      return a.__idx - b.__idx;
+    });
+}
+
 function lastBalance(
   movements: ReturnType<typeof useStore>["state"]["stockMovements"],
   productId: string,
 ) {
-  const filtered = movements.filter((m) => m.productId === productId);
-  return filtered.length ? filtered[filtered.length - 1].balance : 0;
+  const chain = getProductChain(movements, productId);
+  return chain.length ? chain[chain.length - 1].balance : 0;
 }
 
 const TYPE_LABELS: Record<StockType, string> = {
@@ -217,14 +230,14 @@ export default function StockMovement() {
     // 📊 Running trackers — fixes balance/remaining being wrong when 2+ lines
     // in ONE submission touch the same product (each line now sees the
     // previous line's effect instead of the stale snapshot)
-    const runningBalances = new Map<string, number>();
-    const runningRemaining = new Map<string, number>();
-    const getRunningBalance = (productId: string) => {
-      if (!runningBalances.has(productId)) {
-        runningBalances.set(productId, lastBalance(state.stockMovements, productId));
+        const chainSnapshots = new Map<string, MovementWithIdx[]>();
+    const getChain = (productId: string) => {
+      if (!chainSnapshots.has(productId)) {
+        chainSnapshots.set(productId, getProductChain(state.stockMovements, productId));
       }
-      return runningBalances.get(productId)!;
+      return chainSnapshots.get(productId)!;
     };
+    const runningRemaining = new Map<string, number>();
     const getRunningRemaining = (agentId: string, productId: string) => {
       const key = `${agentId}:${productId}`;
       if (!runningRemaining.has(key)) {
@@ -296,9 +309,9 @@ export default function StockMovement() {
               : qty
             : qty;
 
-        const available = checkBalances.has(item.productId)
+                const available = checkBalances.has(item.productId)
           ? checkBalances.get(item.productId)!
-          : getRunningBalance(item.productId);
+          : lastBalance(state.stockMovements, item.productId);
 
         if (boxesQty > available) {
           overStockLines.push(
@@ -342,7 +355,12 @@ export default function StockMovement() {
         const prod = products.find((p) => p.id === item.productId);
         const piecesPerBox = prod?.piecesPerBox ?? prod?.qtyPerBox ?? null;
 
-        const prevBalance = getRunningBalance(item.productId);
+                const chain = getChain(item.productId);
+        const insertAt = chain.findIndex((m) => commonForm.date < m.date);
+        const prevBalance =
+          insertAt === -1
+            ? (chain.length ? chain[chain.length - 1].balance : 0)
+            : (insertAt === 0 ? 0 : chain[insertAt - 1].balance);
 
         // 💰 Agent can override price per delivery line — falls back to
         // the product's default price if left blank
@@ -372,10 +390,51 @@ export default function StockMovement() {
 
         const stockIn = isStockIn ? boxesQty : 0;
         const stockOut = isStockIn ? 0 : boxesQty;
-        const newBalance = parseFloat(
+                const newBalance = parseFloat(
           (prevBalance + stockIn - stockOut).toFixed(3),
         );
-        runningBalances.set(item.productId, newBalance); // keep next line in sync
+
+        if (insertAt !== -1) {
+          let running = newBalance;
+          const laterUpdates: { id: string; balance: number }[] = [];
+          for (let i = insertAt; i < chain.length; i++) {
+            const m = chain[i];
+            running = parseFloat((running + m.stockIn - m.stockOut).toFixed(3));
+            laterUpdates.push({ id: m.id, balance: running });
+          }
+          for (const u of laterUpdates) {
+            const { error: cascadeError } = await supabase
+              .from("stock_movements")
+              .update({ balance: u.balance })
+              .eq("id", u.id);
+            if (cascadeError) throw cascadeError;
+          }
+          dispatch({
+            type: "UPDATE_STOCK_MOVEMENTS",
+            payload: laterUpdates.map((u) => ({
+              ...chain.find((m) => m.id === u.id)!,
+              balance: u.balance,
+            })),
+          });
+        }
+
+                // keep the in-memory chain synced so a second line for the
+        // same product in this same submission sees this movement too
+        chain.splice(insertAt === -1 ? chain.length : insertAt, 0, {
+          id: `pending-${item.id}`,
+          productId: item.productId,
+          date: commonForm.date,
+          type: commonForm.type,
+          isReturn: commonForm.isReturn,
+          unit: item.unit,
+          enteredQty: qty,
+          baseQty,
+          stockIn,
+          stockOut,
+          balance: newBalance,
+          createdBy: state.user?.name ?? "unknown",
+          __idx: chain.length,
+        } as MovementWithIdx);
 
         const { data, error } = await supabase
           .from("stock_movements")
@@ -526,7 +585,7 @@ export default function StockMovement() {
       const lineTotalPrice = lineUnitPrice != null ? parseFloat((qty * lineUnitPrice).toFixed(2)) : null;
 
       // Same-product movements in true chronological (insertion) order
-      const productChain = state.stockMovements.filter((m) => m.productId === editingMovement.productId);
+            const productChain = getProductChain(state.stockMovements, editingMovement.productId);
       const editIndex = productChain.findIndex((m) => m.id === editingMovement.id);
       const prevBalance = editIndex > 0 ? productChain[editIndex - 1].balance : 0;
 
@@ -631,7 +690,7 @@ export default function StockMovement() {
     if (!result.isConfirmed) return;
 
     try {
-      const productChain = state.stockMovements.filter((mv) => mv.productId === m.productId);
+            const productChain = getProductChain(state.stockMovements, m.productId);
       const deleteIndex = productChain.findIndex((mv) => mv.id === m.id);
       const prevBalance = deleteIndex > 0 ? productChain[deleteIndex - 1].balance : 0;
 
@@ -669,6 +728,96 @@ export default function StockMovement() {
       Swal.fire({ icon: "error", title: "Delete Failed", text: err.message || "Failed to delete stock movement." });
     }
   };
+
+    const handleRecalculateAllBalances = async (silent = false) => {
+    if (!silent) {
+      const result = await Swal.fire({
+        icon: "question",
+        title: "Recalculate All Balances?",
+        text: "Walks every movement in true date order and rewrites the balance column only. Dates, quantities, and types stay untouched. Continue?",
+        showCancelButton: true,
+        confirmButtonText: "Recalculate",
+      });
+      if (!result.isConfirmed) return;
+    }
+
+    setSaving(true);
+    try {
+      let fixedCount = 0;
+      const fixedLines: string[] = [];
+
+      for (const prod of products) {
+        const chain = getProductChain(state.stockMovements, prod.id);
+        let running = 0;
+        const updates: { id: string; oldBalance: number; newBalance: number }[] = [];
+
+        for (const m of chain) {
+          running = parseFloat((running + m.stockIn - m.stockOut).toFixed(3));
+          if (Math.abs(running - m.balance) > 0.001) {
+            updates.push({ id: m.id, oldBalance: m.balance, newBalance: running });
+          }
+        }
+
+        for (const u of updates) {
+          const { error } = await supabase
+            .from("stock_movements")
+            .update({ balance: u.newBalance })
+            .eq("id", u.id);
+          if (error) throw error;
+          fixedCount++;
+          fixedLines.push(`${prod.name}: ${u.oldBalance} → ${u.newBalance}`);
+        }
+
+        if (updates.length > 0) {
+          dispatch({
+            type: "UPDATE_STOCK_MOVEMENTS",
+            payload: updates.map((u) => ({
+              ...chain.find((m) => m.id === u.id)!,
+              balance: u.newBalance,
+            })),
+          });
+        }
+      }
+
+      if (silent) {
+        // quiet mode: only say something if it actually fixed something,
+        // as a small corner toast instead of a blocking popup
+        if (fixedCount > 0) {
+          console.log(`Auto-recalculated ${fixedCount} balance(s):`, fixedLines);
+          Swal.fire({
+            toast: true,
+            position: "top-end",
+            icon: "success",
+            title: `Balances synced (${fixedCount} corrected)`,
+            showConfirmButton: false,
+            timer: 2500,
+          });
+        }
+      } else {
+        Swal.fire({
+          icon: "success",
+          title: fixedCount > 0 ? "Balances Corrected" : "No Issues Found",
+          html:
+            fixedCount > 0
+              ? `<div style="text-align:left; font-size:12px; max-height:200px; overflow:auto;">Fixed ${fixedCount} record(s):<br>${fixedLines.join("<br>")}</div>`
+              : "Every balance already matched its true chronological order — the problem isn't ordering-related, it's likely in how a quantity was converted at entry time.",
+        });
+      }
+    } catch (err: any) {
+      Swal.fire({ icon: "error", title: "Recalculate Failed", text: err.message || "Failed to recalculate." });
+    } finally {
+      setSaving(false);
+    }
+    };
+  
+    const autoRecalcRan = useRef(false);
+  useEffect(() => {
+    if (autoRecalcRan.current) return;
+    if (!canEdit) return;
+    if (state.stockMovements.length === 0) return; // wait until data is actually loaded
+    autoRecalcRan.current = true;
+    handleRecalculateAllBalances(true); // true = silent
+  }, [canEdit, state.stockMovements.length]);
 
   // Export CSV Excel
   const handleExportCSV = () => {
@@ -752,6 +901,18 @@ export default function StockMovement() {
             <Printer size={14} />
             Print / PDF
           </button> */}
+
+                    {canEdit && (
+            <button
+              onClick={() => handleRecalculateAllBalances(false)}
+              disabled={saving}
+              className="flex items-center gap-1.5 px-3.5 py-2 text-xs bg-secondary/10 text-secondary border border-secondary/30 rounded-[var(--radius)] hover:bg-secondary/20 transition-colors disabled:opacity-50"
+            >
+              <RefreshCw size={14} className={saving ? "animate-spin" : ""} />
+              {saving ? "Syncing..." : "Recalculate Balances"}
+            </button>
+          )}
+
           {canEdit && (
             <button
               onClick={() => setShowForm((v) => !v)}
