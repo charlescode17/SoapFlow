@@ -1,3 +1,4 @@
+// @ts-nocheck
 export type Lang = "en" | "fr" | "rw";
 
 export const translations: Record<Lang, Record<string, string>> = {

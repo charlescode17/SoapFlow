@@ -1,4 +1,12 @@
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
+import {
+  BrowserRouter,
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+} from "react-router-dom";
 import { StoreProvider, useStore } from "./lib/store";
 import { Layout } from "./components/Layout";
 import { SessionTransition } from "./components/SessionTransition";
@@ -19,6 +27,20 @@ import { normalizeRole, type Page } from "./lib/types";
 
 const turboActive = typeof window !== "undefined" && !!sessionStorage.getItem("turbo_origin_session");
 
+const PAGE_PATHS: Record<Page, string> = {
+  dashboard: "/dashboard",
+  agents: "/agents",
+  products: "/products",
+  clients: "/clients",
+  stock: "/stock",
+  reports: "/reports",
+  loans: "/loans",
+  payments: "/payments",
+  versaiment: "/versaiment",
+  report: "/report",
+  settings: "/settings",
+};
+
 const ROLE_ALLOWED_PAGES: Record<string, Page[]> = {
   manager: [
     "dashboard",
@@ -37,34 +59,49 @@ const ROLE_ALLOWED_PAGES: Record<string, Page[]> = {
   stock_agent: ["dashboard", "products", "stock", "report", "settings"],
 };
 
+function getPageFromPath(pathname: string): Page {
+  const normalized = pathname === "/" ? "/dashboard" : pathname;
+  const pageKey = Object.entries(PAGE_PATHS).find(([, route]) => route === normalized)?.[0] as Page | undefined;
+  return pageKey ?? "dashboard";
+}
+
 function AppInner() {
   const { state, dispatch } = useStore();
-  const [page, setPage] = useState<Page>("dashboard");
+  const navigate = useNavigate();
+  const location = useLocation();
   const [transitionPhase, setTransitionPhase] = useState<"hidden" | "showing" | "fading">("hidden");
 
+  const page = getPageFromPath(location.pathname);
   const userRole = normalizeRole(state.user?.role);
   const allowedPages = ROLE_ALLOWED_PAGES[userRole] ?? ROLE_ALLOWED_PAGES.manager;
 
+  const setPage = (nextPage: Page) => {
+    navigate(PAGE_PATHS[nextPage] ?? PAGE_PATHS.dashboard, { replace: false });
+  };
+
   useEffect(() => {
     if (state.user && !allowedPages.includes(page)) {
-      setPage(allowedPages[0] || "dashboard");
+      const fallbackPage = allowedPages[0] || "dashboard";
+      navigate(PAGE_PATHS[fallbackPage], { replace: true });
     }
-  }, [state.user, page, allowedPages]);
+  }, [state.user, page, allowedPages, navigate]);
 
   const handleLoginSuccess = () => {
     setTransitionPhase("showing");
     setTimeout(() => setTransitionPhase("fading"), 1200);
     setTimeout(() => setTransitionPhase("hidden"), 1700);
+    navigate(PAGE_PATHS.dashboard, { replace: true });
   };
 
-  if (!state.user) return <Login onLoginSuccess={handleLoginSuccess} />;
+  if (!state.user) {
+    return <Login onLoginSuccess={handleLoginSuccess} />;
+  }
 
   const logout = async () => {
     const turboOriginSession = sessionStorage.getItem("turbo_origin_session");
     const turboOriginUser = sessionStorage.getItem("turbo_origin_user");
 
     if (turboOriginSession && turboOriginUser) {
-      // In turbo mode — logout button means "exit turbo", not a real sign-out
       const originSession = JSON.parse(turboOriginSession);
       const originUser = JSON.parse(turboOriginUser);
 
@@ -89,16 +126,16 @@ function AppInner() {
       return;
     }
 
-    // Normal logout — not in turbo mode
     if (state.user) {
       await supabase.from("auth_logs").insert({ user_id: state.user.id, event: "logout" });
     }
     localStorage.removeItem("sf_session_started");
     await supabase.auth.signOut();
     dispatch({ type: "SET_USER", payload: null });
+    navigate("/", { replace: true });
   };
 
-return (
+  return (
     <>
       {transitionPhase !== "hidden" && <SessionTransition phase={transitionPhase} />}
       {turboActive && (
@@ -107,17 +144,21 @@ return (
         </div>
       )}
       <Layout page={page} setPage={setPage} user={state.user} onLogout={logout}>
-        {page === "dashboard" && <Dashboard setPage={setPage} />}
-        {page === "agents" && <Agents />}
-        {page === "products" && <Products />}
-        {page === "clients" && <Clients />}
-        {page === "stock" && <StockMovement />}
-        {page === "reports" && <AgentReports />}
-        {page === "loans" && <Loans setPage={setPage} />}
-        {page === "payments" && <Payments />}
-        {page === "versaiment" && <Versaiment />}
-        {page === "report" && <Report />}
-        {page === "settings" && <Settings />}
+        <Routes>
+          <Route path="/" element={<Navigate to={PAGE_PATHS[allowedPages[0] || "dashboard"]} replace />} />
+          <Route path={PAGE_PATHS.dashboard} element={<Dashboard setPage={setPage} />} />
+          <Route path={PAGE_PATHS.agents} element={<Agents />} />
+          <Route path={PAGE_PATHS.products} element={<Products />} />
+          <Route path={PAGE_PATHS.clients} element={<Clients />} />
+          <Route path={PAGE_PATHS.stock} element={<StockMovement />} />
+          <Route path={PAGE_PATHS.reports} element={<AgentReports />} />
+          <Route path={PAGE_PATHS.loans} element={<Loans setPage={setPage} />} />
+          <Route path={PAGE_PATHS.payments} element={<Payments />} />
+          <Route path={PAGE_PATHS.versaiment} element={<Versaiment />} />
+          <Route path={PAGE_PATHS.report} element={<Report />} />
+          <Route path={PAGE_PATHS.settings} element={<Settings />} />
+          <Route path="*" element={<Navigate to={PAGE_PATHS[allowedPages[0] || "dashboard"]} replace />} />
+        </Routes>
       </Layout>
     </>
   );
@@ -126,7 +167,9 @@ return (
 export default function App() {
   return (
     <StoreProvider>
-      <AppInner />
+      <BrowserRouter>
+        <AppInner />
+      </BrowserRouter>
     </StoreProvider>
   );
 }

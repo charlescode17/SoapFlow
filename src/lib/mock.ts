@@ -15,4 +15,5 @@ export const INITIAL_STATE: AppState = {
     { id: 'b4', name: 'Cogebanque' },
     { id: 'b5', name: 'Ecobank Rwanda' },
   ],
+  expenses: [],
 }

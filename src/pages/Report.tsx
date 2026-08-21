@@ -648,6 +648,8 @@ export default function Report() {
   const [productFilter, setProductFilter] = useState<"all" | string>(
     products[0]?.id ?? "all",
   );
+    const [stockProductFilter, setStockProductFilter] = useState<string[]>([]);
+  // empty array = show all products
   const [modeFilter, setModeFilter] = useState<"all" | PaymentMode>("all");
 
   const [hiddenSections, setHiddenSections] = useState<Record<string, boolean>>({});
@@ -678,9 +680,16 @@ export default function Report() {
   const resetHiddenSections = () => setHiddenSections({});
   const isHidden = (key: string) => Boolean(hiddenSections[key]);
   const hiddenCount = Object.values(hiddenSections).filter(Boolean).length;
+    const toggleStockProduct = (id: string) => {
+    setStockProductFilter((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    );
+  };
 
-  const getName = (id: string, list: { id: string; name: string }[]) =>
-    list.find((i) => i.id === id)?.name ?? "—";
+  const getName = (
+    id: string | null | undefined,
+    list: { id: string; name: string }[],
+  ) => (id ? list.find((i) => i.id === id)?.name ?? "—" : "—");
   const getPaymentPartyName = (p: { clientId?: string; reportId?: string }) => {
     if (p.clientId) return getName(p.clientId, clients);
     const report = activeReports.find((r) => r.id === p.reportId);
@@ -766,6 +775,7 @@ export default function Report() {
       (m) =>
         inDateRange(m.date) &&
         (productFilter === "all" || m.productId === productFilter) &&
+        (stockProductFilter.length === 0 || stockProductFilter.includes(m.productId)) &&
         (agentFilter === "all" || m.agentId === agentFilter),
     );
   }, [
@@ -774,6 +784,7 @@ export default function Report() {
     customFrom,
     customTo,
     productFilter,
+    stockProductFilter,
     agentFilter,
   ]);
 
@@ -1160,6 +1171,7 @@ export default function Report() {
   if (userRole === "stock_agent") {
     const saFiltered = state.stockMovements.filter((m) =>
       inDateRange(m.date) &&
+      (stockProductFilter.length === 0 || stockProductFilter.includes(m.productId)) &&
       (agentFilter === "all" || m.agentId === agentFilter)
     );
 
@@ -1202,7 +1214,12 @@ export default function Report() {
       meta: {
         title: "Stock Movement Report",
         period: dateLabel[dateFilter],
-        scope: agentFilter !== "all" ? getAgentName(agentFilter) : "All Agents",
+        scope: [
+          agentFilter !== "all" ? getAgentName(agentFilter) : "All Agents",
+          stockProductFilter.length > 0
+            ? stockProductFilter.map(getProductName).join(", ")
+            : "All Products",
+        ].join(" · "),
         generatedBy: state.user?.name ?? "Stock Agent",
       },
       summary: [
@@ -1330,6 +1347,41 @@ export default function Report() {
               <option value="all">All Agents</option>
               {agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
             </select>
+          </div>
+        </div>
+
+        {/* Product filter — pick one, several, or leave empty for all */}
+        <div className="bg-card border border-border rounded-[var(--radius-lg)] p-4 mb-6 shadow-sm">
+          <div className="flex items-center justify-between mb-2">
+            <label className="text-[10px] font-semibold text-muted uppercase tracking-wide">Products</label>
+            {stockProductFilter.length > 0 && (
+              <button
+                onClick={() => setStockProductFilter([])}
+                className="text-[11px] font-semibold text-primary hover:underline"
+              >
+                Clear (showing all)
+              </button>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {products.map((p) => (
+              <label
+                key={p.id}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-[var(--radius)] border cursor-pointer transition-colors ${
+                  stockProductFilter.includes(p.id)
+                    ? "bg-primary/10 border-primary/40 text-primary"
+                    : "bg-background border-border text-muted hover:text-foreground"
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={stockProductFilter.includes(p.id)}
+                  onChange={() => toggleStockProduct(p.id)}
+                  className="accent-primary"
+                />
+                {p.name}
+              </label>
+            ))}
           </div>
         </div>
 
@@ -3916,6 +3968,40 @@ export default function Report() {
             </div>
           </div>
 
+          <div className="bg-card border border-border rounded-[var(--radius-lg)] p-4 mb-6 shadow-sm">
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-[10px] font-semibold text-muted uppercase tracking-wide">Products</label>
+              {stockProductFilter.length > 0 && (
+                <button
+                  onClick={() => setStockProductFilter([])}
+                  className="text-[11px] font-semibold text-primary hover:underline"
+                >
+                  Clear (showing all)
+                </button>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {products.map((p) => (
+                <label
+                  key={p.id}
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-[var(--radius)] border cursor-pointer transition-colors ${
+                    stockProductFilter.includes(p.id)
+                      ? "bg-primary/10 border-primary/40 text-primary"
+                      : "bg-background border-border text-muted hover:text-foreground"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={stockProductFilter.includes(p.id)}
+                    onChange={() => toggleStockProduct(p.id)}
+                    className="accent-primary"
+                  />
+                  {p.name}
+                </label>
+              ))}
+            </div>
+          </div>
+
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
             {[
               { label: "Stock In", value: `${stockIn.toLocaleString()} boxes`, icon: ArrowDownCircle, color: "#3FA66B" },
@@ -4299,8 +4385,10 @@ const singleAgentId = mergeAgentIds.length === 1 ? mergeAgentIds[0] : null;
   };
 
   const inDateRange = (date: string) => inRange(date, dateFilter, customFrom, customTo);
-  const getName = (id: string, list: { id: string; name: string }[]) =>
-    list.find((i) => i.id === id)?.name ?? "—";
+  const getName = (
+    id: string | null | undefined,
+    list: { id: string; name: string }[],
+  ) => (id ? list.find((i) => i.id === id)?.name ?? "—" : "—");
   const getPaymentPartyName = (p: { clientId?: string; reportId?: string }) => {
     if (p.clientId) return getName(p.clientId, clients);
     const report = activeReports.find((r) => r.id === p.reportId);
@@ -4312,8 +4400,9 @@ const singleAgentId = mergeAgentIds.length === 1 ? mergeAgentIds[0] : null;
       .reduce((s: number, p: any) => s + p.amount, 0);
     return Math.max(0, report.totalPrice - paid);
   };
-  const getProductName = (id: string) => products.find((p: any) => p.id === id)?.name ?? "—";
-  const getBankName = (id?: string) => (id ? banks.find((b: any) => b.id === id)?.name ?? "—" : "—");
+  const getProductName = (id: string | null | undefined) =>
+    id ? products.find((p: any) => p.id === id)?.name ?? "—" : "—";
+  const getBankName = (id?: string | null) => (id ? banks.find((b: any) => b.id === id)?.name ?? "—" : "—");
 
   const mergeableIds: (typeof section)[] = ["clients", "loanOnly"];
   const activeSection =

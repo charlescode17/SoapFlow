@@ -22,6 +22,7 @@ export type Page =
   | "report"
   | "loans"
   | "payments"
+  | "versaiment"
   | "settings";
 
 export interface User {
