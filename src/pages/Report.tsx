@@ -51,7 +51,7 @@ import {
 } from "recharts";
 import { useStore } from "../lib/store";
 import { fmt, fmtDate, today } from "../lib/utils";
-import { normalizeRole, type PaymentMode } from "../lib/types";
+import { normalizeRole, type PaymentMode, type StockMovement } from "../lib/types";
 import { useVersaimentState, keyFor } from "../lib/versaimentState";
 
 // ============================================================================
@@ -60,8 +60,9 @@ import { useVersaimentState, keyFor } from "../lib/versaimentState";
 // ============================================================================
 const COMPANY_NAME = "Kangaroo Bigger";
 
-type DateFilter = "daily" | "weekly" | "monthly" | "annual" | "custom";
+type DateFilter = "all" | "daily" | "weekly" | "monthly" | "annual" | "custom";
 type ReportType = "sales" | "stock" | "loans" | "payments";
+type StockSort = "date-desc" | "date-asc" | "product-asc" | "product-desc";
 
 /* ============================================================================
    PROFESSIONAL EXPORT ENGINE
@@ -540,22 +541,26 @@ function inRange(
   customFrom: string,
   customTo: string,
 ): boolean {
-  const d = new Date(date);
+  const dateKey = date.slice(0, 10);
   const now = new Date();
-  if (filter === "daily") return d.toDateString() === now.toDateString();
+  const todayKey = [now.getFullYear(), now.getMonth() + 1, now.getDate()]
+    .map((part, index) => index === 0 ? String(part) : String(part).padStart(2, "0"))
+    .join("-");
+  if (filter === "all") return true;
+  if (filter === "daily") return dateKey === todayKey;
   if (filter === "weekly") {
     const weekAgo = new Date(now);
     weekAgo.setDate(now.getDate() - 7);
-    return d >= weekAgo;
+    const weekAgoKey = [weekAgo.getFullYear(), weekAgo.getMonth() + 1, weekAgo.getDate()]
+      .map((part, index) => index === 0 ? String(part) : String(part).padStart(2, "0"))
+      .join("-");
+    return dateKey >= weekAgoKey && dateKey <= todayKey;
   }
-  if (filter === "monthly")
-    return (
-      d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear()
-    );
-  if (filter === "annual") return d.getFullYear() === now.getFullYear();
+  if (filter === "monthly") return dateKey.slice(0, 7) === todayKey.slice(0, 7);
+  if (filter === "annual") return dateKey.slice(0, 4) === todayKey.slice(0, 4);
   if (filter === "custom") {
     if (!customFrom || !customTo) return true;
-    return date >= customFrom && date <= customTo;
+    return dateKey >= customFrom && dateKey <= customTo;
   }
   return true;
 }
@@ -568,6 +573,7 @@ function dateRangeBounds(
   const now = new Date();
   const toStr = (d: Date) => d.toISOString().slice(0, 10);
 
+  if (filter === "all") return {};
   if (filter === "daily") {
     const t = toStr(now);
     return { from: t, to: t };
@@ -598,6 +604,50 @@ const movementLabel = (type: string) =>
         ? "Customer Direct Sale"
         : "Other Adjustment";
 
+function sortStockMovements(
+  movements: StockMovement[],
+  products: { id: string; name: string }[],
+  sort: StockSort,
+): StockMovement[] {
+  const originalIndexes = new Map(movements.map((movement, index) => [movement.id, index]));
+  const productName = (productId: string) =>
+    products.find((product) => product.id === productId)?.name ?? "";
+
+  return movements.slice().sort((a, b) => {
+    const aIndex = originalIndexes.get(a.id) ?? 0;
+    const bIndex = originalIndexes.get(b.id) ?? 0;
+    if (sort === "product-asc" || sort === "product-desc") {
+      const productOrder = productName(a.productId).localeCompare(productName(b.productId), undefined, {
+        sensitivity: "base",
+        numeric: true,
+      });
+      if (productOrder !== 0) return sort === "product-asc" ? productOrder : -productOrder;
+      if (a.date !== b.date) return b.date.localeCompare(a.date);
+      return bIndex - aIndex;
+    }
+
+    if (a.date !== b.date) {
+      return sort === "date-asc" ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date);
+    }
+
+    return sort === "date-asc" ? aIndex - bIndex : bIndex - aIndex;
+  });
+}
+
+function formatStockQuantity(
+  movement: StockMovement,
+  direction: "in" | "out",
+): string {
+  const quantity = direction === "in" ? movement.stockIn : movement.stockOut;
+  if (quantity <= 0) return "0";
+  const enteredQuantity = movement.unit === "piece" && movement.enteredQty
+    ? `${movement.enteredQty} pcs (${quantity} boxes)`
+    : `${quantity} boxes`;
+  return direction === "in"
+    ? `+${enteredQuantity}${movement.isReturn ? " (Return)" : ""}`
+    : `-${enteredQuantity}`;
+}
+
 function computeRowSpans<T>(rows: T[], keyFn: (row: T) => string): number[] {
   const spans = new Array(rows.length).fill(0);
   let i = 0;
@@ -625,6 +675,7 @@ const REPORT_TYPES: {
 ];
 
 const dateLabel: Record<DateFilter, string> = {
+  all: "All time",
   daily: "Today",
   weekly: "This Week",
   monthly: "This Month",
@@ -639,15 +690,14 @@ export default function Report() {
   const clients = state.clients.filter((c) => !c.deleted);
   const activeReports = state.agentReports.filter((r) => !r.deleted);
 
-  const [reportType, setReportType] = useState<ReportType>("sales");
-  const [dateFilter, setDateFilter] = useState<DateFilter>("monthly");
+  const [reportType, setReportType] = useState<ReportType>("stock");
+  const [dateFilter, setDateFilter] = useState<DateFilter>("all");
   const [customFrom, setCustomFrom] = useState(today());
   const [customTo, setCustomTo] = useState(today());
   const [clientFilter, setClientFilter] = useState<"all" | string>("all");
   const [agentFilter, setAgentFilter] = useState<"all" | string>("all");
-  const [productFilter, setProductFilter] = useState<"all" | string>(
-    products[0]?.id ?? "all",
-  );
+  const [productFilter, setProductFilter] = useState<"all" | string>("all");
+  const [stockSort, setStockSort] = useState<StockSort>("date-asc");
     const [stockProductFilter, setStockProductFilter] = useState<string[]>([]);
   // empty array = show all products
   const [modeFilter, setModeFilter] = useState<"all" | PaymentMode>("all");
@@ -655,7 +705,7 @@ export default function Report() {
   const [hiddenSections, setHiddenSections] = useState<Record<string, boolean>>({});
   const [maSection, setMaSection] = useState<"sales" | "salesOnly" | "loanOnly" | "clients" | "payments" | "versaiment">("sales");
   const [isExportingExcel, setIsExportingExcel] = useState(false);
-  const [managerView, setManagerView] = useState<"business" | "stock" | "marketing">("business");
+  const [managerView, setManagerView] = useState<"business" | "stock" | "marketing">("stock");
   const [managerAgentId, setManagerAgentId] = useState<string>("all");
   const { map: versaimentMap } = useVersaimentState();
   const { from: reconFrom, to: reconTo } = dateRangeBounds(dateFilter, customFrom, customTo);
@@ -787,6 +837,11 @@ export default function Report() {
     stockProductFilter,
     agentFilter,
   ]);
+
+  const sortedStockFiltered = useMemo(
+    () => sortStockMovements(stockFiltered, products, stockSort),
+    [stockFiltered, products, stockSort],
+  );
 
   const stockIn = stockFiltered.reduce((s, m) => s + m.stockIn, 0);
   const stockOut = stockFiltered.reduce((s, m) => s + m.stockOut, 0);
@@ -1068,17 +1123,15 @@ export default function Report() {
         {
           heading: "Stock Movement Detail",
           headers: ["Date", "Product", "Type", "Agent", "Location", "Stock In", "Stock Out", "Balance"],
-          rows: stockFiltered
-            .slice()
-            .sort((a, b) => b.date.localeCompare(a.date))
+          rows: sortedStockFiltered
             .map((m) => [
               fmtDate(m.date),
               getName(m.productId, products),
               m.type === "production" ? "Production" : m.type === "marketing_agent" ? "Agent Dispatch" : "Other",
               m.agentId ? getName(m.agentId, agents) : "—",
               m.location || "—",
-              m.stockIn > 0 ? `+${m.stockIn}${m.isReturn ? " (Return)" : ""}` : "0",
-              m.stockOut > 0 ? `-${m.stockOut}` : "0",
+              formatStockQuantity(m, "in"),
+              formatStockQuantity(m, "out"),
               m.balance.toLocaleString(),
             ]),
           numericColumns: [5, 6, 7],
@@ -1189,7 +1242,7 @@ export default function Report() {
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([date, v]) => ({ date: fmtDate(date), In: v.In, Out: v.Out }));
 
-    const saTable = [...saFiltered].sort((a, b) => b.date.localeCompare(a.date));
+    const saTable = sortStockMovements(saFiltered, products, stockSort);
 
     const saKpis = [
       { label: "Total In", value: `+${saIn.toLocaleString()}`, sub: "boxes received", color: "#3FA66B", icon: ArrowDownCircle },
@@ -1199,6 +1252,7 @@ export default function Report() {
     ];
 
     const SA_DATE_FILTERS: { id: DateFilter; label: string }[] = [
+      { id: "all", label: "All time" },
       { id: "daily", label: "Today" },
       { id: "monthly", label: "Monthly" },
       { id: "annual", label: "Annual" },
@@ -1232,13 +1286,13 @@ export default function Report() {
   {
     heading: "Movement Records",
     headers: ["Date", "Product", "Description", "Agent / Location", "Stock In", "Stock Out", "Balance"],
-    rows: saTable.map((m) => [
+      rows: saTable.map((m) => [
       fmtDate(m.date),
       getProductName(m.productId),
       movementLabel(m.type),
       m.agentId ? `${getAgentName(m.agentId)}${m.location ? ` (${m.location})` : ""}` : "—",
-      m.stockIn > 0 ? (m.unit === "piece" && m.enteredQty ? `${m.enteredQty} pcs (${m.stockIn} boxes)` : `+${m.stockIn}`) : "0",
-      m.stockOut > 0 ? (m.unit === "piece" && m.enteredQty ? `${m.enteredQty} pcs (${m.stockOut} boxes)` : `-${m.stockOut}`) : "0",
+      formatStockQuantity(m, "in"),
+      formatStockQuantity(m, "out"),
       m.balance.toLocaleString(),
     ]),
     numericColumns: [4, 5, 6],
@@ -1346,6 +1400,16 @@ export default function Report() {
               className="px-3 py-1.5 text-xs border border-border rounded-[var(--radius)] bg-card focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary">
               <option value="all">All Agents</option>
               {agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-[10px] font-semibold text-muted uppercase tracking-wide block mb-1.5">Sort report</label>
+            <select value={stockSort} onChange={(e) => setStockSort(e.target.value as StockSort)}
+              className="px-3 py-1.5 text-xs border border-border rounded-[var(--radius)] bg-card focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary">
+              <option value="date-asc">Date: oldest first</option>
+                <option value="date-desc">Date: newest first</option>
+              <option value="product-asc">Product: A-Z</option>
+              <option value="product-desc">Product: Z-A</option>
             </select>
           </div>
         </div>
@@ -2264,7 +2328,7 @@ export default function Report() {
             ))}
           </div>
           <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
-            {(["daily", "weekly", "monthly", "annual", "custom"] as const).map((f) => (
+            {(["all", "daily", "weekly", "monthly", "annual", "custom"] as const).map((f) => (
               <button
                 key={f}
                 onClick={() => setDateFilter(f)}
@@ -2883,13 +2947,13 @@ export default function Report() {
               <div>
                 <div className="inline-flex items-center gap-1.5 bg-card/15 backdrop-blur-sm px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wider mb-2.5">
                   <BarChart3 size={11} />
-                  Manager
+                  Manager Overview
                 </div>
                 <h1 className="text-xl sm:text-2xl font-bold">
-                  Command Center — every report, one place
+                  Here's the business at a glance
                 </h1>
                 <p className="text-xs sm:text-sm text-white/80 mt-1">
-                  {dateLabel[dateFilter]} · switch between business, stock and agent-level views
+                  {dateLabel[dateFilter]} · drill into Stock or Marketing Agent reports below
                 </p>
               </div>
               {managerView !== "marketing" && (
@@ -2942,7 +3006,7 @@ export default function Report() {
           {/* View switcher */}
           <div className="flex gap-2 overflow-x-auto pb-1 mb-6 scrollbar-hide">
             {[
-              { id: "business" as const, label: "Business Overview", icon: BarChart3 },
+              { id: "business" as const, label: "Company Reports", icon: FileText },
               { id: "stock" as const, label: "Stock Agent Reports", icon: Package },
               { id: "marketing" as const, label: "Marketing Agent Reports", icon: Users },
             ].map((v) => (
@@ -2951,6 +3015,7 @@ export default function Report() {
                 onClick={() => {
                   setManagerView(v.id);
                   if (v.id === "stock") setReportType("stock");
+                  if (v.id === "business") setReportType("sales");
                 }}
                 className={`flex items-center gap-2 px-4 py-2.5 text-sm font-semibold rounded-[var(--radius)] transition-colors whitespace-nowrap flex-shrink-0 ${
                   managerView === v.id
@@ -3000,7 +3065,7 @@ export default function Report() {
         </div>
       )}
 
-      {managerView === "business" && (
+            {(!isManager || managerView === "business") && (
       <>
       {hiddenCount > 0 && (
         <div className="flex items-center justify-between gap-2 bg-amber-50 border border-amber-200 px-4 py-2.5 rounded-[var(--radius)] mb-4 shadow-sm">
@@ -3021,7 +3086,7 @@ export default function Report() {
       <div className="mb-6 space-y-4">
         {/* Report type tabs */}
         <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
-          {REPORT_TYPES.map((t) => (
+          {(isManager ? REPORT_TYPES.filter((t) => t.id !== "stock") : REPORT_TYPES).map((t) => (
             <button
               key={t.id}
               onClick={() => setReportType(t.id)}
@@ -3040,7 +3105,7 @@ export default function Report() {
         {/* Date range tabs */}
         <div className="flex flex-col sm:flex-row gap-3">
           <div className="flex gap-2 overflow-x-auto pb-1 flex-1 scrollbar-hide">
-            {(["daily", "weekly", "monthly", "annual", "custom"] as const).map(
+            {(["all", "daily", "weekly", "monthly", "annual", "custom"] as const).map(
               (f) => (
                 <button
                   key={f}
@@ -3154,7 +3219,6 @@ export default function Report() {
       {/* ============ SALES ============ */}
       {reportType === "sales" && (
         <>
-          {/* Sales KPIs Grid — 4 in one row, muted professional look */}
           {!isHidden("sales-kpis") && (
             <div className="relative mb-8">
               <button
@@ -3166,50 +3230,19 @@ export default function Report() {
               </button>
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
                 {[
-                  {
-                    label: "Total Revenue",
-                    value: fmt(salesRevenue),
-                    icon: DollarSign,
-                    color: "#2E9E8F",
-                  },
-                  {
-                    label: "Boxes Sold",
-                    value: salesQty.toLocaleString(),
-                    icon: Package,
-                    color: "#3FA66B",
-                  },
-                  {
-                    label: "Outstanding",
-                    value: fmt(salesOutstanding),
-                    icon: CreditCard,
-                    color: "#D99A3D",
-                  },
-                  {
-                    label: "Active Agents",
-                    value: salesByAgent.length.toString(),
-                    icon: Users,
-                    color: "#6B7B78",
-                  },
+                  { label: "Total Revenue", value: fmt(salesRevenue), icon: DollarSign, color: "#2E9E8F" },
+                  { label: "Boxes Sold", value: salesQty.toLocaleString(), icon: Package, color: "#3FA66B" },
+                  { label: "Outstanding", value: fmt(salesOutstanding), icon: CreditCard, color: "#D99A3D" },
+                  { label: "Active Agents", value: salesByAgent.length.toString(), icon: Users, color: "#6B7B78" },
                 ].map((kpi) => (
-                  <div
-                    key={kpi.label}
-                    className="bg-card border border-border rounded-[var(--radius-lg)] p-4 sm:p-5 hover:shadow-md transition-all duration-200"
-                  >
+                  <div key={kpi.label} className="bg-card border border-border rounded-[var(--radius-lg)] p-4 sm:p-5 hover:shadow-md transition-all duration-200">
                     <div className="flex items-center gap-3">
-                      <div
-                        className="w-10 h-10 rounded-[var(--radius)] flex items-center justify-center flex-shrink-0"
-                        style={{ background: kpi.color + "12" }}
-                      >
-                        <kpi.icon
-                          size={18}
-                          style={{ color: kpi.color }}
-                        />
+                      <div className="w-10 h-10 rounded-[var(--radius)] flex items-center justify-center flex-shrink-0" style={{ background: kpi.color + "12" }}>
+                        <kpi.icon size={18} style={{ color: kpi.color }} />
                       </div>
                       <div>
                         <div className="text-[11px] font-semibold text-muted uppercase tracking-wide">{kpi.label}</div>
-                        <div className="text-lg sm:text-xl font-bold leading-tight" style={{ color: kpi.color }}>
-                          {kpi.value}
-                        </div>
+                        <div className="text-lg sm:text-xl font-bold leading-tight" style={{ color: kpi.color }}>{kpi.value}</div>
                       </div>
                     </div>
                   </div>
@@ -3227,68 +3260,26 @@ export default function Report() {
                   <div className="lg:col-span-2 bg-card border border-border rounded-[var(--radius-lg)] p-6 hover:shadow-md transition-shadow duration-200">
                     <div className="flex items-start justify-between mb-4">
                       <div>
-                        <h3 className="text-sm font-semibold text-foreground mb-1">
-                          Revenue Trend
-                        </h3>
-                        <p className="text-xs text-muted">
-                          Sales revenue over the selected period
-                        </p>
+                        <h3 className="text-sm font-semibold text-foreground mb-1">Revenue Trend</h3>
+                        <p className="text-xs text-muted">Sales revenue over the selected period</p>
                       </div>
-                      <button
-                        onClick={() => toggleSection("sales-trend")}
-                        title="Hide chart"
-                        className="p-1 text-muted hover:text-danger hover:bg-danger/10 rounded transition-colors"
-                      >
+                      <button onClick={() => toggleSection("sales-trend")} title="Hide chart" className="p-1 text-muted hover:text-danger hover:bg-danger/10 rounded transition-colors">
                         <Minus size={14} />
                       </button>
                     </div>
                     <ResponsiveContainer width="100%" height={220}>
                       <AreaChart data={salesTrend}>
                         <defs>
-                          <linearGradient
-                            id="revGrad"
-                            x1="0"
-                            y1="0"
-                            x2="0"
-                            y2="1"
-                          >
-                            <stop
-                              offset="5%"
-                              stopColor="#2E9E8F"
-                              stopOpacity={0.15}
-                            />
-                            <stop
-                              offset="95%"
-                              stopColor="#2E9E8F"
-                              stopOpacity={0}
-                            />
+                          <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#2E9E8F" stopOpacity={0.15} />
+                            <stop offset="95%" stopColor="#2E9E8F" stopOpacity={0} />
                           </linearGradient>
                         </defs>
                         <CartesianGrid strokeDasharray="3 3" stroke="#E4EAE8" />
-                        <XAxis
-                          dataKey="date"
-                          tick={{ fontSize: 10, fill: "#6B7B78" }}
-                          tickLine={false}
-                          axisLine={false}
-                        />
-                        <YAxis
-                          tick={{ fontSize: 10, fill: "#6B7B78" }}
-                          tickLine={false}
-                          axisLine={false}
-                          tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`}
-                        />
-                        <Tooltip
-                          contentStyle={{ fontSize: 12, borderRadius: 8 }}
-                          formatter={(v: any) => fmt(Number(v || 0))}
-                        />
-                        <Area
-                          type="monotone"
-                          dataKey="Revenue"
-                          stroke="#2E9E8F"
-                          strokeWidth={2}
-                          fill="url(#revGrad)"
-                          dot={{ fill: "#2E9E8F", r: 3 }}
-                        />
+                        <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#6B7B78" }} tickLine={false} axisLine={false} />
+                        <YAxis tick={{ fontSize: 10, fill: "#6B7B78" }} tickLine={false} axisLine={false} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
+                        <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} formatter={(v: any) => fmt(Number(v || 0))} />
+                        <Area type="monotone" dataKey="Revenue" stroke="#2E9E8F" strokeWidth={2} fill="url(#revGrad)" dot={{ fill: "#2E9E8F", r: 3 }} />
                       </AreaChart>
                     </ResponsiveContainer>
                   </div>
@@ -3298,45 +3289,22 @@ export default function Report() {
                   <div className="bg-card border border-border rounded-[var(--radius-lg)] p-6 hover:shadow-md transition-shadow duration-200">
                     <div className="flex items-start justify-between mb-4">
                       <div>
-                        <h3 className="text-sm font-semibold text-foreground mb-1">
-                          Paid vs Loan
-                        </h3>
-                        <p className="text-xs text-muted">
-                          Revenue by payment status
-                        </p>
+                        <h3 className="text-sm font-semibold text-foreground mb-1">Paid vs Loan</h3>
+                        <p className="text-xs text-muted">Revenue by payment status</p>
                       </div>
-                      <button
-                        onClick={() => toggleSection("sales-pie")}
-                        title="Hide chart"
-                        className="p-1 text-muted hover:text-danger hover:bg-danger/10 rounded transition-colors"
-                      >
+                      <button onClick={() => toggleSection("sales-pie")} title="Hide chart" className="p-1 text-muted hover:text-danger hover:bg-danger/10 rounded transition-colors">
                         <Minus size={14} />
                       </button>
                     </div>
                     <ResponsiveContainer width="100%" height={180}>
                       <PieChart>
-                        <Pie
-                          data={salesStatusPie}
-                          cx="50%"
-                          cy="50%"
-                          innerRadius={50}
-                          outerRadius={75}
-                          paddingAngle={3}
-                          dataKey="value"
-                        >
+                        <Pie data={salesStatusPie} cx="50%" cy="50%" innerRadius={50} outerRadius={75} paddingAngle={3} dataKey="value">
                           {salesStatusPie.map((_, i) => (
                             <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
                           ))}
                         </Pie>
-                        <Tooltip
-                          formatter={(v: any) => fmt(Number(v || 0))}
-                          contentStyle={{ fontSize: 12, borderRadius: 8 }}
-                        />
-                        <Legend
-                          iconSize={8}
-                          iconType="circle"
-                          wrapperStyle={{ fontSize: 11 }}
-                        />
+                        <Tooltip formatter={(v: any) => fmt(Number(v || 0))} contentStyle={{ fontSize: 12, borderRadius: 8 }} />
+                        <Legend iconSize={8} iconType="circle" wrapperStyle={{ fontSize: 11 }} />
                       </PieChart>
                     </ResponsiveContainer>
                   </div>
@@ -3344,58 +3312,25 @@ export default function Report() {
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-                <RankedBarCard
-                  title="Sales by Product"
-                  sub="Revenue breakdown per product"
-                  data={salesByProduct}
-                  color="#2E9E8F"
-                />
-                <RankedBarCard
-                  title="Sales by Agent"
-                  sub="Top performing marketing agents"
-                  data={salesByAgent}
-                  color="#D99A3D"
-                />
+                <RankedBarCard title="Sales by Product" sub="Revenue breakdown per product" data={salesByProduct} color="#2E9E8F" />
+                <RankedBarCard title="Sales by Agent" sub="Top performing marketing agents" data={salesByAgent} color="#D99A3D" />
               </div>
 
               <DetailTable
                 icon={FileText}
                 title="Transaction Detail"
                 count={salesFiltered.length}
-                headers={[
-                  "Date",
-                  "Agent",
-                  "Client",
-                  "Product",
-                  "Qty",
-                  "Total",
-                  "Status",
-                ]}
+                headers={["Date", "Agent", "Client", "Product", "Qty", "Total", "Status"]}
                 rows={salesFiltered
                   .slice()
                   .sort((a, b) => b.date.localeCompare(a.date))
                   .map((r) => ({
                     key: r.id,
-                    cells: [
-                      fmtDate(r.date),
-                      getName(r.agentId, agents),
-                      getName(r.clientId, clients),
-                      getName(r.productId, products),
-                      r.qty.toString(),
-                      fmt(r.totalPrice),
-                    ],
+                    cells: [fmtDate(r.date), getName(r.agentId, agents), getName(r.clientId, clients), getName(r.productId, products), r.qty.toString(), fmt(r.totalPrice)],
                     status:
                       r.paymentStatus === "paid"
-                        ? {
-                            label: "Paid",
-                            className:
-                              "bg-success/10 text-success border border-success/20",
-                          }
-                        : {
-                            label: "Loan",
-                            className:
-                              "bg-secondary/10 text-secondary border border-secondary/20",
-                          },
+                        ? { label: "Paid", className: "bg-success/10 text-success border border-success/20" }
+                        : { label: "Loan", className: "bg-secondary/10 text-secondary border border-secondary/20" },
                     mobileTitle: getName(r.agentId, agents),
                     mobileSub: `→ ${getName(r.clientId, clients)} · ${getName(r.productId, products)}`,
                     mobileLeft: `${r.qty} boxes`,
@@ -3410,53 +3345,21 @@ export default function Report() {
       {/* ============ STOCK MOVEMENT ============ */}
       {reportType === "stock" && (
         <>
-          {/* 4 KPI cards — one row, muted */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-8">
             {[
-              {
-                label: "Stock In",
-                value: `${stockIn.toLocaleString()} boxes`,
-                icon: ArrowDownCircle,
-                color: "#3FA66B",
-              },
-              {
-                label: "Stock Out",
-                value: `${stockOut.toLocaleString()} boxes`,
-                icon: ArrowUpCircle,
-                color: "#E05C5C",
-              },
-              {
-                label: "Net Change",
-                value: `${stockNet >= 0 ? "+" : ""}${stockNet.toLocaleString()}`,
-                icon: Package,
-                color: "#2E9E8F",
-              },
-              {
-                label: "Current Balance",
-                value: `${currentBalance.toLocaleString()} boxes`,
-                icon: BarChart3,
-                color: "#6B7B78",
-              },
+              { label: "Stock In", value: `${stockIn.toLocaleString()} boxes`, icon: ArrowDownCircle, color: "#3FA66B" },
+              { label: "Stock Out", value: `${stockOut.toLocaleString()} boxes`, icon: ArrowUpCircle, color: "#E05C5C" },
+              { label: "Net Change", value: `${stockNet >= 0 ? "+" : ""}${stockNet.toLocaleString()}`, icon: Package, color: "#2E9E8F" },
+              { label: "Current Balance", value: `${currentBalance.toLocaleString()} boxes`, icon: BarChart3, color: "#6B7B78" },
             ].map((kpi) => (
-              <div
-                key={kpi.label}
-                className="bg-card border border-border rounded-[var(--radius-lg)] p-4 sm:p-5 hover:shadow-md transition-all duration-200"
-              >
+              <div key={kpi.label} className="bg-card border border-border rounded-[var(--radius-lg)] p-4 sm:p-5 hover:shadow-md transition-all duration-200">
                 <div className="flex items-center gap-3">
-                  <div
-                    className="w-10 h-10 rounded-[var(--radius)] flex items-center justify-center flex-shrink-0"
-                    style={{ background: kpi.color + "12" }}
-                  >
-                    <kpi.icon
-                      size={18}
-                      style={{ color: kpi.color }}
-                    />
+                  <div className="w-10 h-10 rounded-[var(--radius)] flex items-center justify-center flex-shrink-0" style={{ background: kpi.color + "12" }}>
+                    <kpi.icon size={18} style={{ color: kpi.color }} />
                   </div>
                   <div>
                     <div className="text-[11px] font-semibold text-muted uppercase tracking-wide">{kpi.label}</div>
-                    <div className="text-base sm:text-lg font-bold leading-tight" style={{ color: kpi.color }}>
-                      {kpi.value}
-                    </div>
+                    <div className="text-base sm:text-lg font-bold leading-tight" style={{ color: kpi.color }}>{kpi.value}</div>
                   </div>
                 </div>
               </div>
@@ -3468,64 +3371,26 @@ export default function Report() {
           ) : (
             <>
               <div className="bg-card border border-border rounded-[var(--radius-lg)] p-6 mb-8 hover:shadow-md transition-shadow duration-200">
-                <h3 className="text-sm font-semibold text-foreground mb-1">
-                  Balance Trend
-                </h3>
-                <p className="text-xs text-muted mb-5">
-                  Running balance over the selected period
-                </p>
+                <h3 className="text-sm font-semibold text-foreground mb-1">Balance Trend</h3>
+                <p className="text-xs text-muted mb-5">Running balance over the selected period</p>
                 <ResponsiveContainer width="100%" height={220}>
                   <AreaChart data={stockTrend}>
                     <defs>
-                      <linearGradient
-                        id="stockGrad"
-                        x1="0"
-                        y1="0"
-                        x2="0"
-                        y2="1"
-                      >
-                        <stop
-                          offset="5%"
-                          stopColor="#2E9E8F"
-                          stopOpacity={0.15}
-                        />
-                        <stop
-                          offset="95%"
-                          stopColor="#2E9E8F"
-                          stopOpacity={0}
-                        />
+                      <linearGradient id="stockGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#2E9E8F" stopOpacity={0.15} />
+                        <stop offset="95%" stopColor="#2E9E8F" stopOpacity={0} />
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke="#E4EAE8" />
-                    <XAxis
-                      dataKey="date"
-                      tick={{ fontSize: 10, fill: "#6B7B78" }}
-                      tickLine={false}
-                      axisLine={false}
-                    />
-                    <YAxis
-                      tick={{ fontSize: 10, fill: "#6B7B78" }}
-                      tickLine={false}
-                      axisLine={false}
-                    />
-                    <Tooltip
-                      contentStyle={{ fontSize: 12, borderRadius: 8 }}
-                      formatter={(v: any) => [`${v} boxes`, "Balance"]}
-                    />
-                    <Area
-                      type="monotone"
-                      dataKey="Balance"
-                      stroke="#2E9E8F"
-                      strokeWidth={2}
-                      fill="url(#stockGrad)"
-                      dot={{ fill: "#2E9E8F", r: 3 }}
-                    />
+                    <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#6B7B78" }} tickLine={false} axisLine={false} />
+                    <YAxis tick={{ fontSize: 10, fill: "#6B7B78" }} tickLine={false} axisLine={false} />
+                    <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} formatter={(v: any) => [`${v} boxes`, "Balance"]} />
+                    <Area type="monotone" dataKey="Balance" stroke="#2E9E8F" strokeWidth={2} fill="url(#stockGrad)" dot={{ fill: "#2E9E8F", r: 3 }} />
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
 
               <div className="bg-card border border-border rounded-[var(--radius-lg)] overflow-hidden shadow-sm">
-                {/* Header with Title */}
                 <div className="px-5 py-4 border-b border-border flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="flex items-center gap-2">
                     <Package size={16} className="text-primary flex-shrink-0" />
@@ -3534,7 +3399,6 @@ export default function Report() {
                   </div>
                 </div>
 
-                {/* Desktop & Tablet Table */}
                 <div className="hidden sm:block overflow-x-auto">
                   <table className="w-full border-collapse">
                     <thead>
@@ -3554,39 +3418,20 @@ export default function Report() {
                         .slice()
                         .sort((a, b) => b.date.localeCompare(a.date))
                         .map((m, i) => (
-                          <tr
-                            key={m.id}
-                            className={`border-b border-border/40 transition-colors ${
-                              i % 2 === 1 ? "bg-background/50" : ""
-                            } ${i === stockFiltered.length - 1 ? "border-b-0" : ""}`}
-                          >
-                            <td className="px-4 py-3 text-xs  text-muted whitespace-nowrap">
-                              {fmtDate(m.date)}
-                            </td>
-                            <td className="px-4 py-3 text-xs font-semibold text-foreground whitespace-nowrap">
-                              {getName(m.productId, products)}
-                            </td>
+                          <tr key={m.id} className={`border-b border-border/40 transition-colors ${i % 2 === 1 ? "bg-background/50" : ""} ${i === stockFiltered.length - 1 ? "border-b-0" : ""}`}>
+                            <td className="px-4 py-3 text-xs  text-muted whitespace-nowrap">{fmtDate(m.date)}</td>
+                            <td className="px-4 py-3 text-xs font-semibold text-foreground whitespace-nowrap">{getName(m.productId, products)}</td>
                             <td className="px-4 py-3 text-xs text-muted whitespace-nowrap">
-                              {m.type === "production"
-                                ? "Production"
-                                : m.type === "marketing_agent"
-                                  ? "Agent Dispatch"
-                                  : "Other"}
+                              {m.type === "production" ? "Production" : m.type === "marketing_agent" ? "Agent Dispatch" : "Other"}
                             </td>
-                            <td className="px-4 py-3 text-xs font-medium text-foreground whitespace-nowrap">
-                              {m.agentId ? getName(m.agentId, agents) : "—"}
-                            </td>
-                            <td className="px-4 py-3 text-xs text-muted whitespace-nowrap">
-                              {m.location || "—"}
-                            </td>
+                            <td className="px-4 py-3 text-xs font-medium text-foreground whitespace-nowrap">{m.agentId ? getName(m.agentId, agents) : "—"}</td>
+                            <td className="px-4 py-3 text-xs text-muted whitespace-nowrap">{m.location || "—"}</td>
                             <td className="px-4 py-3 text-center">
                               {m.stockIn > 0 ? (
                                 <div className="inline-flex items-center gap-1.5 text-success text-xs  font-semibold">
                                   <ArrowDownCircle size={11} />+{m.stockIn}
                                   {m.isReturn && (
-                                    <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 uppercase tracking-wide">
-                                      Return
-                                    </span>
+                                    <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 uppercase tracking-wide">Return</span>
                                   )}
                                 </div>
                               ) : (
@@ -3602,34 +3447,21 @@ export default function Report() {
                                 <span className="text-muted text-xs">—</span>
                               )}
                             </td>
-                            <td className="px-4 py-3 text-xs  font-bold text-right text-foreground whitespace-nowrap">
-                              {m.balance.toLocaleString()} boxes
-                            </td>
+                            <td className="px-4 py-3 text-xs  font-bold text-right text-foreground whitespace-nowrap">{m.balance.toLocaleString()} boxes</td>
                           </tr>
                         ))}
                     </tbody>
                     <tfoot>
                       <tr className="border-t-2 border-primary/20 bg-primary/[0.03] font-bold text-xs">
-                        <td colSpan={5} className="px-4 py-3 text-foreground uppercase tracking-wide">
-                          Summary ({stockFiltered.length} Records)
-                        </td>
-                        <td className="px-4 py-3 text-center text-success ">
-                          +{stockFiltered.reduce((s, m) => s + m.stockIn, 0).toLocaleString()}
-                        </td>
-                        <td className="px-4 py-3 text-center text-danger ">
-                          -{stockFiltered.reduce((s, m) => s + m.stockOut, 0).toLocaleString()}
-                        </td>
-                        <td className="px-4 py-3 text-right text-foreground ">
-                          {stockFiltered.length > 0
-                            ? `${stockFiltered[0].balance.toLocaleString()} boxes`
-                            : "—"}
-                        </td>
+                        <td colSpan={5} className="px-4 py-3 text-foreground uppercase tracking-wide">Summary ({stockFiltered.length} Records)</td>
+                        <td className="px-4 py-3 text-center text-success ">+{stockFiltered.reduce((s, m) => s + m.stockIn, 0).toLocaleString()}</td>
+                        <td className="px-4 py-3 text-center text-danger ">-{stockFiltered.reduce((s, m) => s + m.stockOut, 0).toLocaleString()}</td>
+                        <td className="px-4 py-3 text-right text-foreground ">{stockFiltered.length > 0 ? `${stockFiltered[0].balance.toLocaleString()} boxes` : "—"}</td>
                       </tr>
                     </tfoot>
                   </table>
                 </div>
 
-                {/* Mobile View Stacked Cards */}
                 <div className="sm:hidden divide-y divide-border/50">
                   {stockFiltered
                     .slice()
@@ -3637,12 +3469,8 @@ export default function Report() {
                     .map((m) => (
                       <div key={m.id} className="p-4 space-y-2">
                         <div className="flex items-center justify-between">
-                          <span className="text-xs font-bold text-foreground">
-                            {getName(m.productId, products)}
-                          </span>
-                          <span className="text-[11px]  text-muted">
-                            {fmtDate(m.date)}
-                          </span>
+                          <span className="text-xs font-bold text-foreground">{getName(m.productId, products)}</span>
+                          <span className="text-[11px]  text-muted">{fmtDate(m.date)}</span>
                         </div>
                         <div className="flex items-center justify-between text-xs text-muted">
                           <span>
@@ -3654,18 +3482,12 @@ export default function Report() {
                         <div className="flex items-center justify-between text-xs pt-1 border-t border-border/40">
                           <div>
                             {m.stockIn > 0 ? (
-                              <span className="text-success  font-bold">
-                                +{m.stockIn} boxes {m.isReturn ? "(Return)" : ""}
-                              </span>
+                              <span className="text-success  font-bold">+{m.stockIn} boxes {m.isReturn ? "(Return)" : ""}</span>
                             ) : (
-                              <span className="text-danger  font-bold">
-                                -{m.stockOut} boxes
-                              </span>
+                              <span className="text-danger  font-bold">-{m.stockOut} boxes</span>
                             )}
                           </div>
-                          <span className=" font-bold text-foreground">
-                            Bal: {m.balance.toLocaleString()} boxes
-                          </span>
+                          <span className=" font-bold text-foreground">Bal: {m.balance.toLocaleString()} boxes</span>
                         </div>
                       </div>
                     ))}
@@ -3679,53 +3501,21 @@ export default function Report() {
       {/* ============ LOANS ============ */}
       {reportType === "loans" && (
         <>
-          {/* 4 KPI cards — one row, muted */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-8">
             {[
-              {
-                label: "Loans Issued",
-                value: fmt(loansIssued),
-                icon: CreditCard,
-                color: "#D99A3D",
-              },
-              {
-                label: "Payments Received",
-                value: fmt(loanPaymentsReceived),
-                icon: DollarSign,
-                color: "#3FA66B",
-              },
-              {
-                label: "Net Change",
-                value: fmt(loansIssued - loanPaymentsReceived),
-                icon: BarChart3,
-                color: "#2E9E8F",
-              },
-              {
-                label: "Active Clients",
-                value: loansByClient.length.toString(),
-                icon: Users,
-                color: "#6B7B78",
-              },
+              { label: "Loans Issued", value: fmt(loansIssued), icon: CreditCard, color: "#D99A3D" },
+              { label: "Payments Received", value: fmt(loanPaymentsReceived), icon: DollarSign, color: "#3FA66B" },
+              { label: "Net Change", value: fmt(loansIssued - loanPaymentsReceived), icon: BarChart3, color: "#2E9E8F" },
+              { label: "Active Clients", value: loansByClient.length.toString(), icon: Users, color: "#6B7B78" },
             ].map((kpi) => (
-              <div
-                key={kpi.label}
-                className="bg-card border border-border rounded-[var(--radius-lg)] p-4 sm:p-5 hover:shadow-md transition-all duration-200"
-              >
+              <div key={kpi.label} className="bg-card border border-border rounded-[var(--radius-lg)] p-4 sm:p-5 hover:shadow-md transition-all duration-200">
                 <div className="flex items-center gap-3">
-                  <div
-                    className="w-10 h-10 rounded-[var(--radius)] flex items-center justify-center flex-shrink-0"
-                    style={{ background: kpi.color + "12" }}
-                  >
-                    <kpi.icon
-                      size={18}
-                      style={{ color: kpi.color }}
-                    />
+                  <div className="w-10 h-10 rounded-[var(--radius)] flex items-center justify-center flex-shrink-0" style={{ background: kpi.color + "12" }}>
+                    <kpi.icon size={18} style={{ color: kpi.color }} />
                   </div>
                   <div>
                     <div className="text-[11px] font-semibold text-muted uppercase tracking-wide">{kpi.label}</div>
-                    <div className="text-lg font-bold leading-tight" style={{ color: kpi.color }}>
-                      {kpi.value}
-                    </div>
+                    <div className="text-lg font-bold leading-tight" style={{ color: kpi.color }}>{kpi.value}</div>
                   </div>
                 </div>
               </div>
@@ -3739,10 +3529,7 @@ export default function Report() {
               <RankedBarCard
                 title="Top Outstanding Clients"
                 sub="Current outstanding balance (all-time)"
-                data={loansChartData.map((d) => ({
-                  name: d.name,
-                  revenue: d.Outstanding,
-                }))}
+                data={loansChartData.map((d) => ({ name: d.name, revenue: d.Outstanding }))}
                 color="#D99A3D"
                 className="mb-8"
               />
@@ -3751,24 +3538,10 @@ export default function Report() {
                 icon={CreditCard}
                 title="Client Loan Detail"
                 count={loansByClient.length}
-                headers={[
-                  "Client",
-                  "District",
-                  "Qty (period)",
-                  "Issued (period)",
-                  "Paid (period)",
-                  "Outstanding",
-                ]}
+                headers={["Client", "District", "Qty (period)", "Issued (period)", "Paid (period)", "Outstanding"]}
                 rows={loansByClient.map((l) => ({
                   key: l.client.id,
-                  cells: [
-                    l.client.name ?? "—",
-                    l.client.district ?? "—",
-                    l.qty.toString(),
-                    fmt(l.issued),
-                    fmt(l.paidInRange),
-                    fmt(l.outstanding),
-                  ],
+                  cells: [l.client.name ?? "—", l.client.district ?? "—", l.qty.toString(), fmt(l.issued), fmt(l.paidInRange), fmt(l.outstanding)],
                   mobileTitle: l.client.name ?? "—",
                   mobileSub: `${l.client.district ?? "—"} · ${l.qty} boxes this period`,
                   mobileLeft: `Issued: ${fmt(l.issued)}`,
@@ -3783,31 +3556,17 @@ export default function Report() {
       {/* ============ PAYMENTS ============ */}
       {reportType === "payments" && (
         <>
-          {/* 4 KPI cards — one row, muted */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-8">
             <div className="col-span-2 bg-primary/5 border border-primary/15 rounded-[var(--radius-lg)] p-4 sm:p-5">
-              <div className="text-[11px] font-semibold text-primary uppercase tracking-wide mb-1">
-                Total Received
-              </div>
-              <div className="text-xl sm:text-2xl text-primary  font-bold">
-                {fmt(paymentsTotal)}
-              </div>
+              <div className="text-[11px] font-semibold text-primary uppercase tracking-wide mb-1">Total Received</div>
+              <div className="text-xl sm:text-2xl text-primary  font-bold">{fmt(paymentsTotal)}</div>
             </div>
             {(["cash", "bank", "telephone"] as const).map((mode) => {
-              const modeTotal = paymentsFiltered
-                .filter((p) => p.mode === mode)
-                .reduce((s, p) => s + p.amount, 0);
+              const modeTotal = paymentsFiltered.filter((p) => p.mode === mode).reduce((s, p) => s + p.amount, 0);
               return (
-                <div
-                  key={mode}
-                  className="bg-card border border-border rounded-[var(--radius-lg)] p-4 sm:p-5"
-                >
-                  <div className="text-[11px] font-semibold text-muted uppercase tracking-wide mb-1 capitalize">
-                    {mode === "telephone" ? "Mobile Money" : mode}
-                  </div>
-                  <div className="text-base sm:text-lg text-foreground  font-bold">
-                    {fmt(modeTotal)}
-                  </div>
+                <div key={mode} className="bg-card border border-border rounded-[var(--radius-lg)] p-4 sm:p-5">
+                  <div className="text-[11px] font-semibold text-muted uppercase tracking-wide mb-1 capitalize">{mode === "telephone" ? "Mobile Money" : mode}</div>
+                  <div className="text-base sm:text-lg text-foreground  font-bold">{fmt(modeTotal)}</div>
                 </div>
               );
             })}
@@ -3819,96 +3578,36 @@ export default function Report() {
             <>
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
                 <div className="lg:col-span-2 bg-card border border-border rounded-[var(--radius-lg)] p-6 hover:shadow-md transition-shadow duration-200">
-                  <h3 className="text-sm font-semibold text-foreground mb-1">
-                    Payments Trend
-                  </h3>
-                  <p className="text-xs text-muted mb-5">
-                    Amount received over the selected period
-                  </p>
+                  <h3 className="text-sm font-semibold text-foreground mb-1">Payments Trend</h3>
+                  <p className="text-xs text-muted mb-5">Amount received over the selected period</p>
                   <ResponsiveContainer width="100%" height={220}>
                     <AreaChart data={paymentsTrend}>
                       <defs>
-                        <linearGradient
-                          id="payGrad"
-                          x1="0"
-                          y1="0"
-                          x2="0"
-                          y2="1"
-                        >
-                          <stop
-                            offset="5%"
-                            stopColor="#3FA66B"
-                            stopOpacity={0.15}
-                          />
-                          <stop
-                            offset="95%"
-                            stopColor="#3FA66B"
-                            stopOpacity={0}
-                          />
+                        <linearGradient id="payGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#3FA66B" stopOpacity={0.15} />
+                          <stop offset="95%" stopColor="#3FA66B" stopOpacity={0} />
                         </linearGradient>
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" stroke="#E4EAE8" />
-                      <XAxis
-                        dataKey="date"
-                        tick={{ fontSize: 10, fill: "#6B7B78" }}
-                        tickLine={false}
-                        axisLine={false}
-                      />
-                      <YAxis
-                        tick={{ fontSize: 10, fill: "#6B7B78" }}
-                        tickLine={false}
-                        axisLine={false}
-                        tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`}
-                      />
-                      <Tooltip
-                        contentStyle={{ fontSize: 12, borderRadius: 8 }}
-                        formatter={(v: any) => fmt(Number(v || 0))}
-                      />
-                      <Area
-                        type="monotone"
-                        dataKey="Received"
-                        stroke="#3FA66B"
-                        strokeWidth={2}
-                        fill="url(#payGrad)"
-                        dot={{ fill: "#3FA66B", r: 3 }}
-                      />
+                      <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#6B7B78" }} tickLine={false} axisLine={false} />
+                      <YAxis tick={{ fontSize: 10, fill: "#6B7B78" }} tickLine={false} axisLine={false} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
+                      <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} formatter={(v: any) => fmt(Number(v || 0))} />
+                      <Area type="monotone" dataKey="Received" stroke="#3FA66B" strokeWidth={2} fill="url(#payGrad)" dot={{ fill: "#3FA66B", r: 3 }} />
                     </AreaChart>
                   </ResponsiveContainer>
                 </div>
                 <div className="bg-card border border-border rounded-[var(--radius-lg)] p-6 hover:shadow-md transition-shadow duration-200">
-                  <h3 className="text-sm font-semibold text-foreground mb-1">
-                    By Mode
-                  </h3>
-                  <p className="text-xs text-muted mb-5">
-                    Received amount per payment mode
-                  </p>
+                  <h3 className="text-sm font-semibold text-foreground mb-1">By Mode</h3>
+                  <p className="text-xs text-muted mb-5">Received amount per payment mode</p>
                   <ResponsiveContainer width="100%" height={180}>
                     <PieChart>
-                      <Pie
-                        data={paymentsByMode}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={50}
-                        outerRadius={75}
-                        paddingAngle={3}
-                        dataKey="value"
-                      >
+                      <Pie data={paymentsByMode} cx="50%" cy="50%" innerRadius={50} outerRadius={75} paddingAngle={3} dataKey="value">
                         {paymentsByMode.map((_, i) => (
-                          <Cell
-                            key={i}
-                            fill={PIE_COLORS[i % PIE_COLORS.length]}
-                          />
+                          <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
                         ))}
                       </Pie>
-                      <Tooltip
-                        formatter={(v: any) => fmt(Number(v || 0))}
-                        contentStyle={{ fontSize: 12, borderRadius: 8 }}
-                      />
-                      <Legend
-                        iconSize={8}
-                        iconType="circle"
-                        wrapperStyle={{ fontSize: 11 }}
-                      />
+                      <Tooltip formatter={(v: any) => fmt(Number(v || 0))} contentStyle={{ fontSize: 12, borderRadius: 8 }} />
+                      <Legend iconSize={8} iconType="circle" wrapperStyle={{ fontSize: 11 }} />
                     </PieChart>
                   </ResponsiveContainer>
                 </div>
@@ -3921,25 +3620,10 @@ export default function Report() {
                 headers={["Date", "Client", "Amount", "Mode", "Reference"]}
                 rows={paymentsFiltered.map((p) => ({
                   key: p.id,
-                  cells: [
-                    fmtDate(p.date),
-                    getPaymentPartyName(p),
-                    fmt(p.amount),
-                    p.mode === "telephone"
-                      ? "Mobile Money"
-                      : p.mode === "bank"
-                        ? "Bank"
-                        : "Cash",
-                    paymentReference(p),
-                  ],
+                  cells: [fmtDate(p.date), getPaymentPartyName(p), fmt(p.amount), p.mode === "telephone" ? "Mobile Money" : p.mode === "bank" ? "Bank" : "Cash", paymentReference(p)],
                   mobileTitle: getPaymentPartyName(p),
                   mobileSub: paymentReference(p),
-                  mobileLeft:
-                    p.mode === "telephone"
-                      ? "Mobile Money"
-                      : p.mode === "bank"
-                        ? "Bank"
-                        : "Cash",
+                  mobileLeft: p.mode === "telephone" ? "Mobile Money" : p.mode === "bank" ? "Bank" : "Cash",
                   mobileRight: fmt(p.amount),
                 }))}
               />
@@ -3952,8 +3636,43 @@ export default function Report() {
 
       {isManager && managerView === "stock" && (
         <>
-          <div className="bg-card border border-border rounded-[var(--radius-lg)] p-4 mb-6 flex flex-wrap gap-3 items-end shadow-sm">
-            <div className="ml-auto">
+          <div className="bg-card border border-border rounded-[var(--radius-lg)] p-4 mb-6 flex flex-wrap gap-4 items-end shadow-sm">
+            <div>
+              <label className="text-[10px] font-semibold text-muted uppercase tracking-wide block mb-1.5">Report range</label>
+              <div className="flex flex-wrap gap-2">
+                {(["all", "daily", "weekly", "monthly", "annual", "custom"] as const).map((filter) => (
+                  <button
+                    key={filter}
+                    onClick={() => setDateFilter(filter)}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-[var(--radius)] transition-colors ${
+                      dateFilter === filter
+                        ? "bg-primary text-white shadow-sm"
+                        : "bg-background border border-border text-muted hover:text-foreground"
+                    }`}
+                  >
+                    {dateLabel[filter]}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {dateFilter === "custom" && (
+              <div className="flex flex-wrap gap-2 items-center">
+                <input
+                  type="date"
+                  value={customFrom}
+                  onChange={(event) => setCustomFrom(event.target.value)}
+                  className="px-3 py-1.5 text-xs border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+                />
+                <span className="text-xs text-muted">to</span>
+                <input
+                  type="date"
+                  value={customTo}
+                  onChange={(event) => setCustomTo(event.target.value)}
+                  className="px-3 py-1.5 text-xs border border-border rounded-[var(--radius)] focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+                />
+              </div>
+            )}
+            <div>
               <label className="text-[10px] font-semibold text-muted uppercase tracking-wide block mb-1.5">Agent</label>
               <select
                 value={agentFilter}
@@ -3964,6 +3683,16 @@ export default function Report() {
                 {agents.map((a) => (
                   <option key={a.id} value={a.id}>{a.name}</option>
                 ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] font-semibold text-muted uppercase tracking-wide block mb-1.5">Sort report</label>
+              <select value={stockSort} onChange={(e) => setStockSort(e.target.value as StockSort)}
+                className="px-3 py-1.5 text-xs border border-border rounded-[var(--radius)] bg-card focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary">
+                <option value="date-asc">Date: oldest first</option>
+                <option value="date-desc">Date: newest first</option>
+                <option value="product-asc">Product: A-Z</option>
+                <option value="product-desc">Product: Z-A</option>
               </select>
             </div>
           </div>
@@ -4052,9 +3781,7 @@ export default function Report() {
                 title="Movement Records"
                 count={stockFiltered.length}
                 headers={["Date", "Product", "Type", "Agent", "In", "Out", "Balance"]}
-                rows={stockFiltered
-                  .slice()
-                  .sort((a, b) => b.date.localeCompare(a.date))
+                rows={sortedStockFiltered
                   .map((m) => ({
                     key: m.id,
                     cells: [
@@ -4963,7 +4690,7 @@ const singleAgentId = mergeAgentIds.length === 1 ? mergeAgentIds[0] : null;
       <div className="bg-card border border-border rounded-[var(--radius-lg)] p-4 mb-6 shadow-sm">
         <label className="text-[10px] font-semibold text-muted uppercase tracking-wide block mb-1.5">Period</label>
         <div className="flex flex-wrap gap-2">
-          {(["daily", "weekly", "monthly", "annual", "custom"] as const).map((f) => (
+          {(["all", "daily", "weekly", "monthly", "annual", "custom"] as const).map((f) => (
             <button
               key={f}
               onClick={() => setDateFilter(f)}

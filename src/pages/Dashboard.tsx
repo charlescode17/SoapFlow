@@ -26,8 +26,16 @@ interface Props { setPage: (p: Page) => void }
 
 function currentStock(movements: ReturnType<typeof useStore>['state']['stockMovements'], productId: string) {
   if (!Array.isArray(movements)) return 0
-  const filtered = movements.filter(m => m.productId === productId)
-  return filtered.length ? filtered[filtered.length - 1].balance : 0
+  const filtered = movements
+    .map((movement, index) => ({ movement, index }))
+    .filter(({ movement }) => movement.productId === productId)
+    .sort((a, b) => {
+      if (a.movement.date !== b.movement.date) {
+        return a.movement.date.localeCompare(b.movement.date)
+      }
+      return a.index - b.index
+    })
+  return filtered.length ? filtered[filtered.length - 1].movement.balance : 0
 }
 
 const EYEBROW_PHRASES: Record<string, string[]> = {
