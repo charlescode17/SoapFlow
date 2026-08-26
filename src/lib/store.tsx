@@ -42,8 +42,12 @@ type Action =
   | { type: "DELETE_AGENT_REPORT"; id: string }
   | { type: "SET_AGENT_REPORTS"; payload: AgentReport[] }
   | { type: "ADD_PAYMENT"; payload: Payment }
+  | { type: "UPDATE_PAYMENT"; payload: Payment }
+  | { type: "DELETE_PAYMENT"; id: string }
   | { type: "SET_PAYMENTS"; payload: Payment[] }
   | { type: "ADD_EXPENSE"; payload: Expense }
+  | { type: "UPDATE_EXPENSE"; payload: Expense }
+  | { type: "DELETE_EXPENSE"; id: string }
   | { type: "SET_EXPENSES"; payload: Expense[] }
   | { type: "ADD_BANK"; payload: Bank }
   | { type: "DELETE_BANK"; id: string }
@@ -160,10 +164,34 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, agentReports: action.payload };
     case "ADD_PAYMENT":
       return { ...state, payments: [...state.payments, action.payload] };
+    case "UPDATE_PAYMENT":
+      return {
+        ...state,
+        payments: state.payments.map((p) =>
+          p.id === action.payload.id ? action.payload : p,
+        ),
+      };
+    case "DELETE_PAYMENT":
+      return {
+        ...state,
+        payments: state.payments.filter((p) => p.id !== action.id),
+      };
     case "SET_PAYMENTS":
       return { ...state, payments: action.payload };
     case "ADD_EXPENSE":
       return { ...state, expenses: [...state.expenses, action.payload] };
+    case "UPDATE_EXPENSE":
+      return {
+        ...state,
+        expenses: state.expenses.map((e) =>
+          e.id === action.payload.id ? action.payload : e,
+        ),
+      };
+    case "DELETE_EXPENSE":
+      return {
+        ...state,
+        expenses: state.expenses.filter((e) => e.id !== action.id),
+      };
     case "SET_EXPENSES":
       return { ...state, expenses: action.payload };
     case "ADD_BANK":

@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { Plus, Banknote, Receipt } from "lucide-react";
+import { Plus, Banknote, Receipt, Pencil, Trash2, X } from "lucide-react";
 import { useStore } from "../lib/store";
 import { supabase } from "../lib/supabase";
 import { fmt, fmtDate, today } from "../lib/utils";
@@ -234,6 +234,117 @@ const handleConfirmPayment = async () => {
 
     setExpName("");
     setExpAmount("");
+  };
+
+  /* ── Edit / Delete ────────────────────────────────────────── */
+  type PaymentRow = (typeof state.payments)[number];
+  type ExpenseRow = (typeof state.expenses)[number];
+  const [editingPayment, setEditingPayment] = useState<PaymentRow | null>(null);
+  const [editingExpense, setEditingExpense] = useState<ExpenseRow | null>(null);
+  const [modalExpName, setModalExpName] = useState("");
+  const [modalExpAmount, setModalExpAmount] = useState("");
+  const [modalExpSaving, setModalExpSaving] = useState(false);
+
+  const handleAddExpenseForPayment = async () => {
+    if (!modalExpName.trim() || !modalExpAmount || !state.user || !editingPayment) return;
+    setModalExpSaving(true);
+    const { data, error } = await supabase
+      .from("expenses")
+      .insert({
+        agent_id: editingPayment.agentId,
+        date: editingPayment.date,
+        name: modalExpName.trim(),
+        amount: Number(modalExpAmount),
+        created_by: state.user.name,
+      })
+      .select()
+      .single();
+    setModalExpSaving(false);
+
+    if (error) {
+      Swal.fire({ icon: "error", title: "Could not add expense", text: error.message, confirmButtonColor: "#2E9E8F" });
+      return;
+    }
+
+    dispatch({
+      type: "ADD_EXPENSE",
+      payload: {
+        id: data.id,
+        agentId: data.agent_id,
+        date: data.date,
+        name: data.name,
+        amount: Number(data.amount),
+        createdBy: data.created_by,
+      },
+    });
+    setModalExpName("");
+    setModalExpAmount("");
+  };
+
+  const handleUpdatePayment = async (updated: PaymentRow) => {
+    const { error } = await supabase
+      .from("payments")
+      .update({
+        date: updated.date,
+        amount: updated.amount,
+        mode: updated.mode,
+        bank_id: updated.mode === "bank" ? updated.bankId || null : null,
+        receiver_name: updated.mode === "telephone" || updated.mode === "bank" ? updated.receiverName || null : null,
+      })
+      .eq("id", updated.id);
+    if (error) {
+      Swal.fire({ icon: "error", title: "Could not update payment", text: error.message, confirmButtonColor: "#2E9E8F" });
+      return;
+    }
+    dispatch({ type: "UPDATE_PAYMENT", payload: updated });
+    setEditingPayment(null);
+    Swal.fire({ icon: "success", title: "Payment updated", timer: 1200, showConfirmButton: false });
+  };
+
+  const handleDeletePayment = async (payment: PaymentRow) => {
+    const confirm = await Swal.fire({
+      icon: "warning", title: "Delete this payment?",
+      text: `${getPaymentPartyName(payment)} — ${fmt(payment.amount)}`,
+      showCancelButton: true, confirmButtonText: "Delete", confirmButtonColor: "#e11d48",
+    });
+    if (!confirm.isConfirmed) return;
+    const { error } = await supabase.from("payments").delete().eq("id", payment.id);
+    if (error) {
+      Swal.fire({ icon: "error", title: "Could not delete payment", text: error.message, confirmButtonColor: "#2E9E8F" });
+      return;
+    }
+  dispatch({ type: "DELETE_PAYMENT", id: payment.id });
+    Swal.fire({ icon: "success", title: "Payment deleted", timer: 1200, showConfirmButton: false });
+  };
+
+  const handleUpdateExpense = async (updated: ExpenseRow) => {
+    const { error } = await supabase
+      .from("expenses")
+      .update({ date: updated.date, name: updated.name, amount: updated.amount })
+      .eq("id", updated.id);
+    if (error) {
+      Swal.fire({ icon: "error", title: "Could not update expense", text: error.message, confirmButtonColor: "#2E9E8F" });
+      return;
+    }
+    dispatch({ type: "UPDATE_EXPENSE", payload: updated });
+    setEditingExpense(null);
+    Swal.fire({ icon: "success", title: "Expense updated", timer: 1200, showConfirmButton: false });
+  };
+
+  const handleDeleteExpense = async (expense: ExpenseRow) => {
+    const confirm = await Swal.fire({
+      icon: "warning", title: "Delete this expense?",
+      text: `${expense.name} — ${fmt(expense.amount)}`,
+      showCancelButton: true, confirmButtonText: "Delete", confirmButtonColor: "#e11d48",
+    });
+    if (!confirm.isConfirmed) return;
+    const { error } = await supabase.from("expenses").delete().eq("id", expense.id);
+    if (error) {
+      Swal.fire({ icon: "error", title: "Could not delete expense", text: error.message, confirmButtonColor: "#2E9E8F" });
+      return;
+    }
+  dispatch({ type: "DELETE_EXPENSE", id: expense.id });
+    Swal.fire({ icon: "success", title: "Expense deleted", timer: 1200, showConfirmButton: false });
   };
 
   /* ── Day-grouped report ───────────────────────────────────── */
@@ -552,7 +663,7 @@ const handleConfirmPayment = async () => {
                 <table className="w-full min-w-[960px]">
                   <thead>
                         <tr className="border-b border-border bg-background/50">
-                          {["Client / Expense", "Cash", "Bank", "Bank Name", "Mobile", "Receiver", "Depense", "Amount", "Versaiment"].map((h) => (
+                          {["Client / Expense", "Cash", "Bank", "Bank Name", "Mobile", "Receiver", "Amount", "Depense", "Versaiment", "Actions"].map((h) => (
                         <th key={h} className="text-left text-[10px] text-muted uppercase tracking-wide px-3 py-2.5 whitespace-nowrap">
                           {h}
                         </th>
@@ -572,7 +683,7 @@ const handleConfirmPayment = async () => {
                       return (
                         <FragmentDay key={date}>
                           <tr className="bg-accent/30">
-                            <td colSpan={9} className="px-3 py-1.5 text-xs font-semibold text-foreground">
+                            <td colSpan={10} className="px-3 py-1.5 text-xs font-semibold text-foreground">
                               {fmtDate(date)}
                             </td>
                           </tr>
@@ -587,6 +698,25 @@ const handleConfirmPayment = async () => {
                               <td className="px-3 py-2 text-xs text-muted">—</td>
                               <td className="px-3 py-2 text-xs text-muted">—</td>
                               <td className="px-3 py-2 text-xs text-muted">—</td>
+                              <td className="px-3 py-2">
+                                {canRecord && (
+                                  <div className="flex gap-1.5">
+                                    <button
+                                      onClick={() => {
+                                        setEditingPayment(p);
+                                        setModalExpName("");
+                                        setModalExpAmount("");
+                                      }}
+                                      className="p-1 rounded hover:bg-accent/50 text-muted hover:text-primary"
+                                    >
+                                      <Pencil size={13} />
+                                    </button>
+                                    <button onClick={() => handleDeletePayment(p)} className="p-1 rounded hover:bg-danger/10 text-muted hover:text-danger">
+                                      <Trash2 size={13} />
+                                    </button>
+                                  </div>
+                                )}
+                              </td>
                             </tr>
                           ))}
                           {dayExpenses.map((e) => (
@@ -597,9 +727,21 @@ const handleConfirmPayment = async () => {
                               <td className="px-3 py-2 text-xs text-muted">—</td>
                               <td className="px-3 py-2 text-xs text-muted">—</td>
                               <td className="px-3 py-2 text-xs text-muted">—</td>
-                              <td className="px-3 py-2 text-xs text-foreground">{e.name}</td>
                               <td className="px-3 py-2 text-xs font-mono text-danger">{fmt(e.amount)}</td>
+                              <td className="px-3 py-2 text-xs text-foreground">{e.name}</td>
                               <td className="px-3 py-2 text-xs text-muted">—</td>
+                              <td className="px-3 py-2">
+                                {canRecord && (
+                                  <div className="flex gap-1.5">
+                                    <button onClick={() => setEditingExpense(e)} className="p-1 rounded hover:bg-accent/50 text-muted hover:text-primary">
+                                      <Pencil size={13} />
+                                    </button>
+                                    <button onClick={() => handleDeleteExpense(e)} className="p-1 rounded hover:bg-danger/10 text-muted hover:text-danger">
+                                      <Trash2 size={13} />
+                                    </button>
+                                  </div>
+                                )}
+                              </td>
                             </tr>
                           ))}
                           <tr className="border-b-2 border-border bg-accent/50 font-semibold">
@@ -609,13 +751,14 @@ const handleConfirmPayment = async () => {
                             <td className="px-3 py-2"></td>
                             <td className="px-3 py-2 text-xs font-mono text-secondary">{fmt(dayTel)}</td>
                             <td className="px-3 py-2"></td>
-                            <td className="px-3 py-2"></td>
                             <td className="px-3 py-2 text-xs font-mono text-danger">{fmt(dayExp)}</td>
+                            <td className="px-3 py-2"></td>
                             <td className="px-3 py-2 sticky right-0 bg-accent/50">
                               <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-white px-3 py-1 rounded-full bg-gradient-to-r from-primary via-emerald-500 to-primary bg-[length:200%_auto] shadow-sm shadow-primary/30">
                                 💰 {fmt(dayVersaiment)}
                               </span>
                             </td>
+                            <td className="px-3 py-2"></td>
                           </tr>
                         </FragmentDay>
                       );
@@ -626,6 +769,172 @@ const handleConfirmPayment = async () => {
             )}
           </div>
         </>
+      )}
+
+      {editingPayment && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-card rounded-[var(--radius-lg)] p-5 w-full max-w-sm">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-sm font-semibold">Edit Payment</h3>
+              <button onClick={() => setEditingPayment(null)}><X size={16} /></button>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-muted block mb-1">Amount</label>
+                <input
+                  type="number"
+                  value={editingPayment.amount}
+                  onChange={(e) => setEditingPayment({ ...editingPayment, amount: Number(e.target.value) })}
+                  className="w-full px-3 py-2 text-sm border border-border rounded-[var(--radius)]"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-muted block mb-1">Date</label>
+                <input
+                  type="date"
+                  value={editingPayment.date}
+                  onChange={(e) => setEditingPayment({ ...editingPayment, date: e.target.value })}
+                  className="w-full px-3 py-2 text-sm border border-border rounded-[var(--radius)]"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-muted block mb-1">Mode</label>
+                <select
+                  value={editingPayment.mode}
+                  onChange={(e) => setEditingPayment({ ...editingPayment, mode: e.target.value as PaymentMode })}
+                  className="w-full px-3 py-2 text-sm border border-border rounded-[var(--radius)] bg-card"
+                >
+                  <option value="cash">Cash</option>
+                  <option value="bank">Bank</option>
+                  <option value="telephone">Mobile</option>
+                </select>
+              </div>
+              {editingPayment.mode === "bank" && (
+                <div>
+                  <label className="text-xs text-muted block mb-1">Bank</label>
+                  <select
+                    value={editingPayment.bankId ?? ""}
+                    onChange={(e) => setEditingPayment({ ...editingPayment, bankId: e.target.value })}
+                    className="w-full px-3 py-2 text-sm border border-border rounded-[var(--radius)] bg-card"
+                  >
+                    <option value="">Select bank</option>
+                    {state.banks.map((b) => (
+                      <option key={b.id} value={b.id}>{b.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {(editingPayment.mode === "bank" || editingPayment.mode === "telephone") && (
+                <div>
+                  <label className="text-xs text-muted block mb-1">Receiver Name</label>
+                  <input
+                    value={editingPayment.receiverName ?? ""}
+                    onChange={(e) => setEditingPayment({ ...editingPayment, receiverName: e.target.value })}
+                    className="w-full px-3 py-2 text-sm border border-border rounded-[var(--radius)]"
+                  />
+                </div>
+              )}
+
+              <div className="pt-3 border-t border-border/60">
+                <label className="text-xs text-muted uppercase tracking-wide block mb-2">
+                  Expenses on {fmtDate(editingPayment.date)}
+                </label>
+                <div className="space-y-1.5 max-h-32 overflow-y-auto mb-3">
+                  {state.expenses.filter((e) => e.date === editingPayment.date && e.agentId === editingPayment.agentId).length === 0 ? (
+                    <p className="text-xs text-muted">No expenses logged for this date</p>
+                  ) : (
+                    state.expenses
+                      .filter((e) => e.date === editingPayment.date && e.agentId === editingPayment.agentId)
+                      .map((e) => (
+                        <div key={e.id} className="flex items-center justify-between text-xs gap-2">
+                          <span className="text-foreground flex-1">{e.name}</span>
+                          <span className="font-mono text-secondary">{fmt(e.amount)}</span>
+                          <button onClick={() => handleDeleteExpense(e)} className="p-1 rounded hover:bg-danger/10 text-muted hover:text-danger">
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      ))
+                  )}
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    value={modalExpName}
+                    onChange={(e) => setModalExpName(e.target.value)}
+                    placeholder="Expense name"
+                    className="flex-1 px-2.5 py-2 text-xs border border-border rounded-[var(--radius)]"
+                  />
+                  <input
+                    type="number"
+                    min="1"
+                    value={modalExpAmount}
+                    onChange={(e) => setModalExpAmount(e.target.value)}
+                    placeholder="Amount"
+                    className="w-24 px-2.5 py-2 text-xs border border-border rounded-[var(--radius)]"
+                  />
+                  <button
+                    onClick={handleAddExpenseForPayment}
+                    disabled={modalExpSaving || !modalExpName.trim() || !modalExpAmount}
+                    className="px-3 py-2 text-xs bg-secondary/10 text-secondary border border-secondary/20 rounded-[var(--radius)] hover:bg-secondary/20 disabled:opacity-60"
+                  >
+                    <Plus size={13} />
+                  </button>
+                </div>
+              </div>
+
+              <button
+                onClick={() => handleUpdatePayment(editingPayment)}
+                className="w-full py-2 text-sm bg-primary text-white rounded-[var(--radius)] mt-2"
+              >
+                Save Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingExpense && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-card rounded-[var(--radius-lg)] p-5 w-full max-w-sm">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-sm font-semibold">Edit Expense</h3>
+              <button onClick={() => setEditingExpense(null)}><X size={16} /></button>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-muted block mb-1">Name</label>
+                <input
+                  value={editingExpense.name}
+                  onChange={(e) => setEditingExpense({ ...editingExpense, name: e.target.value })}
+                  className="w-full px-3 py-2 text-sm border border-border rounded-[var(--radius)]"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-muted block mb-1">Amount</label>
+                <input
+                  type="number"
+                  value={editingExpense.amount}
+                  onChange={(e) => setEditingExpense({ ...editingExpense, amount: Number(e.target.value) })}
+                  className="w-full px-3 py-2 text-sm border border-border rounded-[var(--radius)]"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-muted block mb-1">Date</label>
+                <input
+                  type="date"
+                  value={editingExpense.date}
+                  onChange={(e) => setEditingExpense({ ...editingExpense, date: e.target.value })}
+                  className="w-full px-3 py-2 text-sm border border-border rounded-[var(--radius)]"
+                />
+              </div>
+              <button
+                onClick={() => handleUpdateExpense(editingExpense)}
+                className="w-full py-2 text-sm bg-primary text-white rounded-[var(--radius)] mt-2"
+              >
+                Save Changes
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
