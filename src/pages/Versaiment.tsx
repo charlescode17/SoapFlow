@@ -9,6 +9,7 @@ import {
   Square,
   CheckSquare,
   X,
+  Printer,
 } from "lucide-react";
 import { useStore } from "../lib/store";
 import { fmt, fmtDate, today } from "../lib/utils";
@@ -81,12 +82,20 @@ export default function Versaiment() {
       versaimentDate: existing?.versaimentDate,
       source,
       madeBy: existing?.madeBy,
+      bank: existing?.bank,
     });
   };
 
   // ── batch approval ──
   const [selected, setSelected] = useState<string[]>([]);
   const [versaimentDate, setVersaimentDate] = useState(today());
+  const [bankId, setBankId] = useState(state.banks[0]?.id ?? "");
+  useEffect(() => {
+    // Resync if banks loaded after mount, or the selected bank was deleted in Settings.
+    if (!state.banks.some((b) => b.id === bankId)) {
+      setBankId(state.banks[0]?.id ?? "");
+    }
+  }, [state.banks, bankId]);
 
   const toggleSelect = (date: string) => {
     setSelected((prev) => (prev.includes(date) ? prev.filter((d) => d !== date) : [...prev, date]));
@@ -97,6 +106,7 @@ export default function Versaiment() {
     .reduce((s, d) => s + amountFor(d), 0);
 
   const approveSelected = () => {
+    const bankName = state.banks.find((b) => b.id === bankId)?.name ?? "";
     selected.forEach((date) => {
       const d = days.find((dd) => dd.date === date);
       if (!d) return;
@@ -105,6 +115,7 @@ export default function Versaiment() {
         versaimentDate,
         source: sourceFor(d),
         madeBy: madeBy.trim() || effectiveAgentName,
+        bank: bankName,
       });
     });
     setSelected([]);
@@ -117,7 +128,54 @@ export default function Versaiment() {
       approved: false,
       source: d ? sourceFor(d) : "cash",
       madeBy: existing?.madeBy,
+      bank: existing?.bank,
     });
+  };
+
+  const printVersaimentReport = () => {
+    const rowsHtml = days
+      .map((d) => {
+        const record = recordFor(d.date);
+        const source = sourceFor(d);
+        return `
+        <tr>
+          <td>${fmtDate(d.date)}</td>
+          <td>${record?.approved ? "Approved" : "Pending"}</td>
+          <td>${source === "cash" ? "Cash" : "Mobile Money"}</td>
+          <td>${fmt(amountFor(d))}</td>
+          <td>${record?.bank ?? "—"}</td>
+          <td>${record?.versaimentDate ? fmtDate(record.versaimentDate) : "—"}</td>
+          <td>${record?.madeBy ?? "—"}</td>
+        </tr>`;
+      })
+      .join("");
+    const win = window.open("", "_blank");
+    if (!win) return;
+    win.document.write(`
+      <html>
+        <head>
+          <title>Versaiment Report — ${effectiveAgentName}</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 24px; }
+            h1 { font-size: 18px; margin-bottom: 4px; }
+            p.meta { color: #666; font-size: 12px; margin-top: 0; margin-bottom: 16px; }
+            table { width: 100%; border-collapse: collapse; }
+            th, td { border: 1px solid #ccc; padding: 6px 10px; font-size: 12px; text-align: left; }
+            th { background: #f3f4f6; }
+          </style>
+        </head>
+        <body>
+          <h1>Versaiment Report — ${effectiveAgentName}</h1>
+          <p class="meta">Generated ${new Date().toLocaleString()} — ${days.length} day(s) · Pending ${fmt(totalPending)} · Approved ${fmt(totalApproved)}</p>
+          <table>
+            <thead><tr><th>Date</th><th>Status</th><th>Source</th><th>Amount</th><th>Bank</th><th>Versaiment Date</th><th>Made By</th></tr></thead>
+            <tbody>${rowsHtml}</tbody>
+          </table>
+        </body>
+      </html>
+    `);
+    win.document.close();
+    win.print();
   };
 
   return (
@@ -126,12 +184,21 @@ export default function Versaiment() {
       <div className="relative overflow-hidden rounded-[var(--radius-lg)] bg-gradient-to-br from-primary via-primary to-emerald-600 text-white p-5 sm:p-7 mb-6 shadow-lg">
         <div className="pointer-events-none absolute -right-10 -top-14 w-56 h-56 rounded-full bg-card/10" />
         <div className="pointer-events-none absolute -right-32 top-10 w-72 h-72 rounded-full bg-card/[0.06]" />
+        <div className="relative flex items-center justify-between gap-3 mb-3">
+          <div className="inline-flex items-center gap-1.5 bg-card/15 backdrop-blur-sm px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wider">
+            <Wallet size={11} />
+            Versaiment
+          </div>
+          <button
+            onClick={printVersaimentReport}
+            className="inline-flex items-center gap-1.5 bg-card/15 backdrop-blur-sm hover:bg-card/25 transition-colors px-3 py-1.5 rounded-full text-[11px] font-semibold flex-shrink-0"
+          >
+            <Printer size={12} />
+            Print
+          </button>
+        </div>
         <div className="relative flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <div className="inline-flex items-center gap-1.5 bg-card/15 backdrop-blur-sm px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wider mb-2.5">
-              <Wallet size={11} />
-              Versaiment
-            </div>
             <h1 className="text-xl sm:text-2xl font-bold">Cash Remittance Tracker</h1>
             <p className="text-xs sm:text-sm text-white/80 mt-1">
               Daily cash (or mobile money) collected minus expenses
@@ -190,6 +257,17 @@ export default function Versaiment() {
               onChange={(e) => setVersaimentDate(e.target.value)}
               className="px-2.5 py-1.5 text-xs rounded-[var(--radius-sm)] border-0 text-foreground"
             />
+            <label className="text-[11px] text-white/80">Bank</label>
+            <select
+              value={bankId}
+              onChange={(e) => setBankId(e.target.value)}
+              className="px-2.5 py-1.5 text-xs rounded-[var(--radius-sm)] border-0 text-foreground bg-card"
+            >
+              <option value="">Select bank…</option>
+              {state.banks.map((b) => (
+                <option key={b.id} value={b.id}>{b.name}</option>
+              ))}
+            </select>
             <button
               onClick={approveSelected}
               className="px-3.5 py-1.5 text-xs font-semibold bg-card text-primary rounded-[var(--radius)] hover:bg-card/90 transition-colors"
@@ -330,6 +408,7 @@ export default function Versaiment() {
                       <div className="text-[11px] text-muted mb-4">
                         via {sourceFor(d) === "cash" ? "Cash" : "Mobile Money"}
                         {record?.versaimentDate && ` · versed ${fmtDate(record.versaimentDate)}`}
+                        {record?.bank && ` · ${record.bank}`}
                         {record?.madeBy && ` · by ${record.madeBy}`}
                       </div>
 
@@ -372,6 +451,7 @@ export default function Versaiment() {
               <div className="text-xs text-white/80 mt-1">
                 via {sourceFor(detailDay) === "cash" ? "Cash" : "Mobile Money"}
                 {detailRecord?.approved ? " · Approved" : " · Pending"}
+                {detailRecord?.bank && ` · ${detailRecord.bank}`}
                 {detailRecord?.madeBy && ` · by ${detailRecord.madeBy}`}
               </div>
             </div>
